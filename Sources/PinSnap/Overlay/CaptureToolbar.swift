@@ -58,7 +58,7 @@ final class CaptureToolbar: NSPanel {
     private let rowHeight: CGFloat = 40
     private let sidePad: CGFloat = 10
     private let gap: CGFloat = 8
-    private let barWidth: CGFloat = 450
+    private let barWidth: CGFloat = 490
     private let subRowExtra: CGFloat = 34
     private let dividerHeight: CGFloat = 1
     /// 工具条与选区之间的间距
@@ -89,7 +89,7 @@ final class CaptureToolbar: NSPanel {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 450, height: rowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: 490, height: rowHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -123,15 +123,19 @@ final class CaptureToolbar: NSPanel {
         row1.orientation = .horizontal
         row1.spacing = gap
         row1.alignment = .centerY
+        row1.distribution = .gravityAreas
         row1.edgeInsets = NSEdgeInsets(top: 5, left: sidePad, bottom: 5, right: sidePad)
         row1.translatesAutoresizingMaskIntoConstraints = false
+        row1.setHuggingPriority(.defaultHigh, for: .horizontal)
 
         row2.orientation = .horizontal
         row2.spacing = gap
         row2.alignment = .centerY
+        row2.distribution = .gravityAreas
         row2.edgeInsets = NSEdgeInsets(top: 4, left: sidePad, bottom: 5, right: sidePad)
         row2.isHidden = true
         row2.translatesAutoresizingMaskIntoConstraints = false
+        row2.setHuggingPriority(.defaultHigh, for: .horizontal)
 
         // 第一层
         let shapeBtn = iconBtn("rectangle.on.rectangle", tip: "形状", tag: CaptureAnnotateTool.shape.rawValue)
@@ -204,8 +208,6 @@ final class CaptureToolbar: NSPanel {
             rootStack.trailingAnchor.constraint(equalTo: chrome.trailingAnchor),
             rootStack.topAnchor.constraint(equalTo: chrome.topAnchor),
             rootStack.bottomAnchor.constraint(equalTo: chrome.bottomAnchor),
-            row1.widthAnchor.constraint(equalTo: rootStack.widthAnchor),
-            row2.widthAnchor.constraint(equalTo: rootStack.widthAnchor),
             rowDivider.heightAnchor.constraint(equalToConstant: dividerHeight),
             rowDivider.leadingAnchor.constraint(equalTo: rootStack.leadingAnchor, constant: sidePad),
             rowDivider.trailingAnchor.constraint(equalTo: rootStack.trailingAnchor, constant: -sidePad),
@@ -398,6 +400,8 @@ final class CaptureToolbar: NSPanel {
         v.wantsLayer = true
         v.layer?.backgroundColor = NSColor(calibratedWhite: 0.55, alpha: 0.45).cgColor
         v.translatesAutoresizingMaskIntoConstraints = false
+        v.setContentHuggingPriority(.required, for: .horizontal)
+        v.setContentCompressionResistancePriority(.required, for: .horizontal)
         NSLayoutConstraint.activate([
             v.widthAnchor.constraint(equalToConstant: 1),
             v.heightAnchor.constraint(equalToConstant: 18),
