@@ -53,7 +53,7 @@ public final class HotKeyCenter {
 
     private func install(id: UInt32, key: UInt32, mods: UInt32) throws {
         var hotKeyRef: EventHotKeyRef?
-        var hotKeyID = EventHotKeyID(signature: OSType(0x504E5350), id: id) // 'PNSP'
+        let hotKeyID = EventHotKeyID(signature: OSType(0x504E5350), id: id) // 'PNSP'
         let status = RegisterEventHotKey(key, mods, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
         guard status == noErr else {
             throw CaptureError.failed("热键注册失败 (\(status))")

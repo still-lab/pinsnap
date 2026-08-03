@@ -102,7 +102,8 @@ final class CaptureToolbar: NSPanel {
         hidesOnDeactivate = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        let chrome = NSVisualEffectView(frame: .zero)
+        // contentView 跟窗口 frame 走 autoresizing，避免 width 约束 + setFrame 互相递归 layout
+        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: barWidth, height: rowHeight))
         chrome.material = .popover
         chrome.blendingMode = .withinWindow
         chrome.state = .active
@@ -112,7 +113,7 @@ final class CaptureToolbar: NSPanel {
         chrome.layer?.masksToBounds = true
         chrome.layer?.borderWidth = 0.5
         chrome.layer?.borderColor = NSColor.white.withAlphaComponent(0.65).cgColor
-        chrome.translatesAutoresizingMaskIntoConstraints = false
+        chrome.autoresizingMask = [.width, .height]
 
         rootStack.orientation = .vertical
         rootStack.spacing = 0
@@ -203,7 +204,6 @@ final class CaptureToolbar: NSPanel {
 
         contentView = chrome
         NSLayoutConstraint.activate([
-            chrome.widthAnchor.constraint(equalToConstant: barWidth),
             rootStack.leadingAnchor.constraint(equalTo: chrome.leadingAnchor),
             rootStack.trailingAnchor.constraint(equalTo: chrome.trailingAnchor),
             rootStack.topAnchor.constraint(equalTo: chrome.topAnchor),
@@ -212,7 +212,7 @@ final class CaptureToolbar: NSPanel {
             rowDivider.leadingAnchor.constraint(equalTo: rootStack.leadingAnchor, constant: sidePad),
             rowDivider.trailingAnchor.constraint(equalTo: rootStack.trailingAnchor, constant: -sidePad),
         ])
-        refreshSelectionUI()
+        refreshSelectionUI(resizeWindow: false)
     }
 
     var width: CGFloat { barWidth }
@@ -264,25 +264,25 @@ final class CaptureToolbar: NSPanel {
     private func applyFrame(preserveOrigin: Bool) {
         let h = height
         let w = barWidth
-        // display:false，避免在 layout 中再触发 layoutSubtreeIfNeeded
+        let next: NSRect
         if preserveOrigin {
             let top = frame.maxY
-            setFrame(NSRect(x: frame.origin.x, y: top - h, width: w, height: h), display: false)
+            next = NSRect(x: frame.origin.x, y: top - h, width: w, height: h)
         } else {
-            setFrame(NSRect(x: frame.origin.x, y: frame.origin.y, width: w, height: h), display: false)
+            next = NSRect(x: frame.origin.x, y: frame.origin.y, width: w, height: h)
         }
-        setContentSize(NSSize(width: w, height: h))
+        guard !next.equalTo(frame) else { return }
+        setFrame(next, display: false)
     }
 
-    /// 延后改窗口尺寸，躲开按钮 action / stack layout 中的递归 layout。
+    /// 延后到当前 layout 结束后再改窗口尺寸，避免 layoutSubtreeIfNeeded 递归。
     private func scheduleApplyFrame(preserveTop: Bool) {
         if let pending = pendingFramePreserveTop {
-            // 同一轮合并：只要有一次要锁顶边就锁顶边
             pendingFramePreserveTop = pending || preserveTop
         } else {
             pendingFramePreserveTop = preserveTop
         }
-        DispatchQueue.main.async { [weak self] in
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
             guard let self, let preserve = self.pendingFramePreserveTop else { return }
             self.pendingFramePreserveTop = nil
             guard !self.isApplyingFrame else { return }
@@ -292,7 +292,7 @@ final class CaptureToolbar: NSPanel {
         }
     }
 
-    private func refreshSelectionUI() {
+    private func refreshSelectionUI(resizeWindow: Bool = true) {
         let idle = NSColor(calibratedWhite: 0.2, alpha: 1)
         for (t, b) in toolButtons {
             let on = t == selectedTool
@@ -337,7 +337,9 @@ final class CaptureToolbar: NSPanel {
         mosaicModeButton.contentTintColor = mosaicStyle == .mosaic ? .controlAccentColor : idle
         blurModeButton.contentTintColor = mosaicStyle == .blur ? .controlAccentColor : idle
 
-        scheduleApplyFrame(preserveTop: true)
+        if resizeWindow {
+            scheduleApplyFrame(preserveTop: true)
+        }
     }
 
     private func symbol(for tool: CaptureAnnotateTool) -> String {
