@@ -158,7 +158,7 @@ final class CaptureToolbar: NSPanel {
         refreshSelectionUI()
     }
 
-    func place(under selection: CGRect, inScreenBounds screen: CGRect) {
+    func place(under selection: CGRect, inScreenBounds screen: CGRect, bringToFront: Bool = true) {
         refreshHeight()
         let h = height
         let w = barWidth
@@ -168,8 +168,10 @@ final class CaptureToolbar: NSPanel {
             y = min(selection.maxY + 2, screen.maxY - h - 2)
         }
         x = min(max(x, screen.minX + 2), screen.maxX - w - 2)
-        setFrame(NSRect(x: x, y: y, width: w, height: h), display: true)
-        orderFrontRegardless()
+        setFrame(NSRect(x: x, y: y, width: w, height: h), display: false)
+        if bringToFront || !isVisible {
+            orderFrontRegardless()
+        }
     }
 
     private func refreshHeight() {

@@ -400,7 +400,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                 } else {
                     selection = next
                 }
-                showToolbar()
+                repositionToolbar()
                 syncLayers()
             }
             return
@@ -434,6 +434,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         if moveGrabStart != nil {
             moveGrabStart = nil
             moveOriginRect = nil
+            showToolbar()
             return
         }
         guard var draft = draftShape else {
@@ -769,18 +770,28 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
 
     private func showToolbar() {
         guard let selection else { return }
-        hideToolbar()
-        let bar = CaptureToolbar()
-        bar.actionHandler = self
-        bar.setShapeStyle(shapeStyle)
-        bar.setSelectedTool(activeTool)
-        if let screen = geometry.screen(id: selection.screenID) {
-            bar.place(under: selection.logicalRect, inScreenBounds: screen.logicalFrame)
-        } else {
-            bar.setFrameOrigin(NSPoint(x: selection.logicalRect.midX - bar.width / 2, y: selection.logicalRect.minY - bar.height - 2))
-            bar.orderFrontRegardless()
+        if toolbar == nil {
+            let bar = CaptureToolbar()
+            bar.actionHandler = self
+            toolbar = bar
         }
-        toolbar = bar
+        guard let toolbar else { return }
+        toolbar.setShapeStyle(shapeStyle)
+        toolbar.setSelectedTool(activeTool)
+        repositionToolbar()
+    }
+
+    /// 只更新位置，不销毁重建（拖动选区时每帧重建会导致工具栏闪烁）。
+    private func repositionToolbar() {
+        guard let selection, let toolbar else { return }
+        if let screen = geometry.screen(id: selection.screenID) {
+            toolbar.place(under: selection.logicalRect, inScreenBounds: screen.logicalFrame, bringToFront: false)
+        } else {
+            toolbar.setFrameOrigin(NSPoint(
+                x: selection.logicalRect.midX - toolbar.width / 2,
+                y: selection.logicalRect.minY - toolbar.height - 2
+            ))
+        }
     }
 
     private func hideToolbar() {
