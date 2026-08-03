@@ -839,7 +839,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     // MARK: - Toolbar / layers
 
     private func showToolbar() {
-        guard let selection else { return }
+        guard selection != nil else { return }
         if toolbar == nil {
             let bar = CaptureToolbar()
             bar.actionHandler = self

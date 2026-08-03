@@ -84,6 +84,8 @@ final class CaptureToolbar: NSPanel {
     private var mosaicModeButton: NSButton!
     private var blurModeButton: NSButton!
     private var rowDivider: NSView!
+    private var pendingFramePreserveTop: Bool?
+    private var isApplyingFrame = false
 
     init() {
         super.init(
@@ -177,6 +179,14 @@ final class CaptureToolbar: NSPanel {
         mosaicSubStack.addArrangedSubview(mosaicModeButton)
         mosaicSubStack.addArrangedSubview(blurModeButton)
 
+        row2.addArrangedSubview(shapeSubStack)
+        row2.addArrangedSubview(arrowSubStack)
+        row2.addArrangedSubview(mosaicSubStack)
+        shapeSubStack.isHidden = true
+        arrowSubStack.isHidden = true
+        mosaicSubStack.isHidden = true
+        row2.isHidden = true
+
         rowDivider = NSView()
         rowDivider.wantsLayer = true
         rowDivider.layer?.backgroundColor = NSColor(calibratedWhite: 0.55, alpha: 0.35).cgColor
@@ -200,7 +210,6 @@ final class CaptureToolbar: NSPanel {
             rowDivider.leadingAnchor.constraint(equalTo: rootStack.leadingAnchor, constant: sidePad),
             rowDivider.trailingAnchor.constraint(equalTo: rootStack.trailingAnchor, constant: -sidePad),
         ])
-        applyFrame(preserveOrigin: false)
         refreshSelectionUI()
     }
 
@@ -253,15 +262,32 @@ final class CaptureToolbar: NSPanel {
     private func applyFrame(preserveOrigin: Bool) {
         let h = height
         let w = barWidth
+        // display:false，避免在 layout 中再触发 layoutSubtreeIfNeeded
         if preserveOrigin {
-            // 锁定顶边：子栏向下展开，不把主栏往上顶
             let top = frame.maxY
-            setFrame(NSRect(x: frame.origin.x, y: top - h, width: w, height: h), display: true)
+            setFrame(NSRect(x: frame.origin.x, y: top - h, width: w, height: h), display: false)
         } else {
-            setFrame(NSRect(x: frame.origin.x, y: frame.origin.y, width: w, height: h), display: true)
+            setFrame(NSRect(x: frame.origin.x, y: frame.origin.y, width: w, height: h), display: false)
         }
         setContentSize(NSSize(width: w, height: h))
-        contentView?.setFrameSize(NSSize(width: w, height: h))
+    }
+
+    /// 延后改窗口尺寸，躲开按钮 action / stack layout 中的递归 layout。
+    private func scheduleApplyFrame(preserveTop: Bool) {
+        if let pending = pendingFramePreserveTop {
+            // 同一轮合并：只要有一次要锁顶边就锁顶边
+            pendingFramePreserveTop = pending || preserveTop
+        } else {
+            pendingFramePreserveTop = preserveTop
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let preserve = self.pendingFramePreserveTop else { return }
+            self.pendingFramePreserveTop = nil
+            guard !self.isApplyingFrame else { return }
+            self.isApplyingFrame = true
+            self.applyFrame(preserveOrigin: preserve)
+            self.isApplyingFrame = false
+        }
     }
 
     private func refreshSelectionUI() {
@@ -282,26 +308,17 @@ final class CaptureToolbar: NSPanel {
             }
         }
 
-        let activeSub: NSStackView?
-        switch selectedTool {
-        case .shape: activeSub = shapeSubStack
-        case .arrow: activeSub = arrowSubStack
-        case .mosaic: activeSub = mosaicSubStack
-        default: activeSub = nil
-        }
+        let showShape = selectedTool == .shape
+        let showArrow = selectedTool == .arrow
+        let showMosaic = selectedTool == .mosaic
+        let showSub = showShape || showArrow || showMosaic
 
-        // 只挂当前子栏，避免多个 stack 同时参与布局把宽度撑开
-        for stack in [shapeSubStack, arrowSubStack, mosaicSubStack] {
-            if stack.superview != nil { row2.removeArrangedSubview(stack); stack.removeFromSuperview() }
-        }
-        if let activeSub {
-            row2.addArrangedSubview(activeSub)
-            row2.isHidden = false
-            rowDivider.isHidden = false
-        } else {
-            row2.isHidden = true
-            rowDivider.isHidden = true
-        }
+        // 只用 isHidden，不在 layout 中增删 arrangedSubview
+        shapeSubStack.isHidden = !showShape
+        arrowSubStack.isHidden = !showArrow
+        mosaicSubStack.isHidden = !showMosaic
+        row2.isHidden = !showSub
+        rowDivider.isHidden = !showSub
 
         rectButton.state = shapeStyle == .rect ? .on : .off
         ellipseButton.state = shapeStyle == .ellipse ? .on : .off
@@ -318,7 +335,7 @@ final class CaptureToolbar: NSPanel {
         mosaicModeButton.contentTintColor = mosaicStyle == .mosaic ? .controlAccentColor : idle
         blurModeButton.contentTintColor = mosaicStyle == .blur ? .controlAccentColor : idle
 
-        applyFrame(preserveOrigin: true)
+        scheduleApplyFrame(preserveTop: true)
     }
 
     private func symbol(for tool: CaptureAnnotateTool) -> String {
