@@ -738,24 +738,35 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
         field.delegate = self
         field.target = self
         field.action = #selector(commitTextField)
+        // 校准完成前不显示：field editor 挂在 window 上，需一并藏
+        field.alphaValue = 0
         addSubview(field)
         textField = field
 
         window?.makeKeyAndOrderFront(nil)
         window?.makeFirstResponder(field)
+        if let editor = field.currentEditor() as? NSTextView {
+            editor.alphaValue = 0
+        }
         DispatchQueue.main.async { [weak self, weak field] in
             guard let self, let field else { return }
             self.window?.makeFirstResponder(field)
-            guard let editor = field.currentEditor() as? NSTextView else { return }
-            editor.insertionPointColor = color
+            guard let editor = field.currentEditor() as? NSTextView else {
+                field.alphaValue = 1
+                return
+            }
+            editor.alphaValue = 0
             let caretIndex = initial.count
             editor.selectedRange = NSRange(location: caretIndex, length: 0)
             // 对齐插入条几何中心（midY），不是 caret.origin（底边）
             self.alignTextField(field, editor: editor, caretIndex: caretIndex, to: origin)
             self.reseatFieldEditor(field, editor: editor, caretIndex: caretIndex, color: color)
+            editor.alphaValue = 0
             // select 可能微移 titleRect，再补一次
             self.alignTextField(field, editor: editor, caretIndex: caretIndex, to: origin)
             self.reseatFieldEditor(field, editor: editor, caretIndex: caretIndex, color: color)
+            editor.alphaValue = 1
+            field.alphaValue = 1
         }
     }
 
