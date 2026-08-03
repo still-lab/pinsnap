@@ -120,19 +120,35 @@ public final class PinStore: PinStoreProtocol {
         let file = "\(id.uuidString).png"
         let url = sessionDir.appendingPathComponent(file)
         try ImageExporter().save(image, to: url, format: .png)
-        let size = NSSize(width: CGFloat(image.width) / (NSScreen.main?.backingScaleFactor ?? 2),
-                          height: CGFloat(image.height) / (NSScreen.main?.backingScaleFactor ?? 2))
-        let origin = frame?.origin ?? NSPoint(
-            x: (NSScreen.main?.frame.midX ?? 400) - size.width / 2,
-            y: (NSScreen.main?.frame.midY ?? 300) - size.height / 2
-        )
-        let item = PinItem(id: id, frame: CGRect(origin: origin, size: size), imageFileName: file)
+
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let logicalSize: NSSize
+        let origin: NSPoint
+        if let frame, frame.width > 1, frame.height > 1 {
+            logicalSize = frame.size
+            origin = frame.origin
+        } else {
+            logicalSize = NSSize(
+                width: CGFloat(image.width) / scale,
+                height: CGFloat(image.height) / scale
+            )
+            origin = NSPoint(
+                x: (NSScreen.main?.frame.midX ?? 400) - logicalSize.width / 2,
+                y: (NSScreen.main?.frame.midY ?? 300) - logicalSize.height / 2
+            )
+        }
+        let item = PinItem(id: id, frame: CGRect(origin: origin, size: logicalSize), imageFileName: file)
         pins.append(item)
         let panel = PinPanelController(item: item, imageURL: url, store: self)
         panels[id] = panel
         panel.show()
         Task { try? await persistSession() }
         return item
+    }
+
+    public func updateFrame(id: UUID, frame: CGRect) {
+        guard let index = pins.firstIndex(where: { $0.id == id }) else { return }
+        pins[index].frame = frame
     }
 
     public func close(id: UUID) throws {

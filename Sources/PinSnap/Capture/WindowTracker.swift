@@ -15,6 +15,7 @@ public struct WindowTracker: WindowTrackerProtocol {
         guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
             return []
         }
+        let ownPID = Int(ProcessInfo.processInfo.processIdentifier)
         var results: [WindowHit] = []
         for entry in info {
             guard
@@ -24,6 +25,10 @@ public struct WindowTracker: WindowTrackerProtocol {
                 layer == 0
             else { continue }
 
+            if let pid = entry[kCGWindowOwnerPID as String] as? Int, pid == ownPID {
+                continue
+            }
+
             let bounds = CGRect(
                 x: boundsDict["X"] ?? 0,
                 y: boundsDict["Y"] ?? 0,
@@ -32,7 +37,7 @@ public struct WindowTracker: WindowTrackerProtocol {
             )
             // CGWindow bounds are top-left origin in global display space; convert to Cocoa bottom-left
             let cocoa = cgToCocoa(bounds)
-            guard cocoa.contains(globalPoint) else { continue }
+            guard cocoa.width >= 8, cocoa.height >= 8, cocoa.contains(globalPoint) else { continue }
             let name = (entry[kCGWindowName as String] as? String)
                 ?? (entry[kCGWindowOwnerName as String] as? String)
                 ?? ""

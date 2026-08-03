@@ -66,10 +66,52 @@ public final class AnnotationController: AnnotationControlling {
 
     public init() {}
 
+    public func reset() {
+        document = AnnotationDocument()
+        undoStack.removeAll()
+        redoStack.removeAll()
+    }
+
     public func add(_ shape: Shape) {
         undoStack.append(document)
         redoStack.removeAll()
-        document.shapes.append(shape)
+        var next = document
+        next.shapes.append(shape)
+        document = next
+    }
+
+    public func replace(_ shape: Shape) {
+        guard let index = document.shapes.firstIndex(where: { $0.id == shape.id }) else {
+            add(shape)
+            return
+        }
+        undoStack.append(document)
+        redoStack.removeAll()
+        var next = document
+        next.shapes[index] = shape
+        document = next
+    }
+
+    public func remove(id: UUID) {
+        guard document.shapes.contains(where: { $0.id == id }) else { return }
+        undoStack.append(document)
+        redoStack.removeAll()
+        var next = document
+        next.shapes.removeAll { $0.id == id }
+        document = next
+    }
+
+    /// 拖动过程中更新，不进撤销栈（开始拖动前请先 `prepareUndoCheckpoint()`）
+    public func prepareUndoCheckpoint() {
+        undoStack.append(document)
+        redoStack.removeAll()
+    }
+
+    public func setShapeLive(_ shape: Shape) {
+        guard let index = document.shapes.firstIndex(where: { $0.id == shape.id }) else { return }
+        var next = document
+        next.shapes[index] = shape
+        document = next
     }
 
     public func undo() {
@@ -82,6 +124,66 @@ public final class AnnotationController: AnnotationControlling {
         guard let next = redoStack.popLast() else { return }
         undoStack.append(document)
         document = next
+    }
+
+    public var canUndo: Bool { !undoStack.isEmpty }
+
+    /// text 的 lineWidth 即逻辑点字号。
+    public static func textFont(size: CGFloat) -> NSFont {
+        .systemFont(ofSize: size, weight: .medium)
+    }
+
+    public static func textSize(_ shape: Shape) -> CGSize {
+        textSize(text: shape.text ?? "", fontSize: max(12, shape.lineWidth))
+    }
+
+    public static func textSize(text: String, fontSize: CGFloat) -> CGSize {
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: textFont(size: fontSize),
+            .foregroundColor: NSColor.black,
+        ]
+        let s = (text as NSString).size(withAttributes: attrs)
+        return CGSize(width: ceil(s.width), height: ceil(s.height))
+    }
+
+    /// `points[0]` = 字框左下角（AppKit 坐标）。
+    public static func textFrame(_ shape: Shape) -> CGRect {
+        CGRect(origin: shape.points.first ?? .zero, size: textSize(shape))
+    }
+
+    public static func makeTextCGImage(
+        text: String,
+        color: NSColor,
+        fontSize: CGFloat,
+        scale: CGFloat
+    ) -> CGImage? {
+        let size = textSize(text: text, fontSize: fontSize)
+        guard size.width > 0.5, size.height > 0.5 else { return nil }
+        let pixelW = max(1, Int(ceil(size.width * scale)))
+        let pixelH = max(1, Int(ceil(size.height * scale)))
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: pixelW,
+            pixelsHigh: pixelH,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else { return nil }
+        rep.size = size
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        guard let nsCtx = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        NSGraphicsContext.current = nsCtx
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: textFont(size: fontSize),
+            .foregroundColor: color,
+        ]
+        (text as NSString).draw(in: CGRect(origin: .zero, size: size), withAttributes: attrs)
+        return rep.cgImage
     }
 
     public func exportFlattened(base: CGImage) -> CGImage? {
@@ -136,20 +238,16 @@ public final class AnnotationController: AnnotationControlling {
             ctx.strokePath()
         case .text:
             let text = shape.text ?? ""
-            let attrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: shape.nsColor,
-                .font: NSFont.systemFont(ofSize: max(14, shape.lineWidth * 6)),
-            ]
-            let ns = NSAttributedString(string: text, attributes: attrs)
-            let size = ns.size()
-            // Flip for CG: draw via NSImage bridge
-            let img = NSImage(size: size)
-            img.lockFocus()
-            ns.draw(at: .zero)
-            img.unlockFocus()
-            if let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-                ctx.draw(cg, in: CGRect(origin: first, size: size))
-            }
+            guard !text.isEmpty else { return }
+            let fontSize = max(12, shape.lineWidth)
+            guard let cg = AnnotationController.makeTextCGImage(
+                text: text,
+                color: shape.nsColor,
+                fontSize: fontSize,
+                scale: 1
+            ) else { return }
+            let size = AnnotationController.textSize(text: text, fontSize: fontSize)
+            ctx.draw(cg, in: CGRect(origin: first, size: size))
         case .mosaic, .blur:
             guard let last = pts.last else { return }
             let r = CGRect(x: min(first.x, last.x), y: min(first.y, last.y),

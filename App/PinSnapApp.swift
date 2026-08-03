@@ -37,46 +37,97 @@ final class PinSnapApp: NSObject, NSApplicationDelegate {
             button.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "PinSnap")
             button.image?.isTemplate = true
             button.toolTip = "PinSnap"
-            button.target = self
-            button.action = #selector(statusLeftClick(_:))
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
+        item.menu = buildStatusMenu()
         statusItem = item
     }
 
-    @objc private func statusLeftClick(_ sender: NSStatusBarButton) {
-        guard let event = NSApp.currentEvent else {
-            AppBootstrap.shared.coordinator.beginCapture()
-            return
-        }
-        if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
-            showMenu(sender)
-        } else {
-            AppBootstrap.shared.coordinator.beginCapture()
-        }
+    private func rebuildStatusMenu() {
+        statusItem?.menu = buildStatusMenu()
     }
 
-    private func showMenu(_ sender: NSStatusBarButton) {
+    /// 对标 Snipaste / iShot：分区下拉，不展示快捷键列。
+    private func buildStatusMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(withTitle: "截图", action: #selector(capture), keyEquivalent: "a").keyEquivalentModifierMask = [.control, .shift]
-        menu.addItem(withTitle: "贴图", action: #selector(paste), keyEquivalent: "v").keyEquivalentModifierMask = [.control, .shift]
-        menu.addItem(withTitle: "显示/隐藏贴图", action: #selector(togglePins), keyEquivalent: "h").keyEquivalentModifierMask = [.control, .shift]
+        menu.autoenablesItems = false
+
+        menu.addItem(actionItem("偏好设置", #selector(openSettings)))
         menu.addItem(.separator())
-        menu.addItem(withTitle: "取消全部穿透", action: #selector(clearClickThrough), keyEquivalent: "")
-        menu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",")
-        menu.addItem(withTitle: FeatureGate.shared.isPro ? "管理 Pro…" : "升级 Pro…", action: #selector(openUpgrade), keyEquivalent: "")
+
+        menu.addItem(actionItem("截图", #selector(capture)))
+        menu.addItem(actionItem("截图并自动复制", #selector(captureAutoCopy)))
+        menu.addItem(actionItem("从剪切板贴图", #selector(paste)))
+        menu.addItem(actionItem("隐藏/显示所有贴图", #selector(togglePins)))
+        menu.addItem(actionItem("取消全部穿透", #selector(clearClickThrough)))
+        menu.addItem(actionItem("清空截屏历史", #selector(clearHistory)))
         menu.addItem(.separator())
-        menu.addItem(withTitle: "退出 PinSnap", action: #selector(quit), keyEquivalent: "q")
-        for item in menu.items { item.target = self }
-        statusItem?.menu = menu
-        sender.performClick(nil)
-        statusItem?.menu = nil
+
+        let disableHotKeys = NSMenuItem(
+            title: "禁用快捷键",
+            action: #selector(toggleDisableHotKeys(_:)),
+            keyEquivalent: ""
+        )
+        disableHotKeys.target = self
+        disableHotKeys.state = AppBootstrap.shared.hotKeysDisabled ? .on : .off
+        menu.addItem(disableHotKeys)
+        menu.addItem(.separator())
+
+        menu.addItem(actionItem("打开最后保存目录", #selector(openLastSaveDir)))
+        menu.addItem(actionItem(
+            FeatureGate.shared.isPro ? "管理专业版…" : "解锁专业版…",
+            #selector(openUpgrade)
+        ))
+        menu.addItem(.separator())
+
+        menu.addItem(actionItem("退出", #selector(quit)))
+        return menu
     }
 
-    @objc private func capture() { AppBootstrap.shared.coordinator.beginCapture() }
-    @objc private func paste() { AppBootstrap.shared.coordinator.beginPasteFromClipboard() }
-    @objc private func togglePins() { AppBootstrap.shared.coordinator.togglePinVisibility() }
-    @objc private func clearClickThrough() { AppBootstrap.shared.pins.clearAllClickThrough() }
+    private func actionItem(_ title: String, _ selector: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+        item.target = self
+        item.isEnabled = true
+        return item
+    }
+
+    @objc private func capture() {
+        // 等菜单收起后再截帧，避免菜单残影 / 抢焦点导致遮罩收不到拖拽
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            AppBootstrap.shared.coordinator.beginCapture(autoCopy: false)
+        }
+    }
+
+    @objc private func captureAutoCopy() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            AppBootstrap.shared.coordinator.beginCapture(autoCopy: true)
+        }
+    }
+
+    @objc private func paste() {
+        AppBootstrap.shared.coordinator.beginPasteFromClipboard()
+    }
+
+    @objc private func togglePins() {
+        AppBootstrap.shared.coordinator.togglePinVisibility()
+    }
+
+    @objc private func clearClickThrough() {
+        AppBootstrap.shared.pins.clearAllClickThrough()
+    }
+
+    @objc private func clearHistory() {
+        AppBootstrap.shared.coordinator.clearCaptureHistory()
+    }
+
+    @objc private func toggleDisableHotKeys(_ sender: NSMenuItem) {
+        AppBootstrap.shared.toggleHotKeysDisabled()
+        rebuildStatusMenu()
+    }
+
+    @objc private func openLastSaveDir() {
+        AppBootstrap.shared.coordinator.openLastSaveDirectory()
+    }
+
     @objc private func openSettings() { showSettings() }
     @objc private func openUpgrade() { showUpgrade() }
     @objc private func quit() { NSApp.terminate(nil) }

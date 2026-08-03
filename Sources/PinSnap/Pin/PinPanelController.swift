@@ -7,7 +7,7 @@ public final class PinPanelController: NSObject, NSWindowDelegate {
     private let imageURL: URL
     private weak var store: PinStore?
     private var panel: NSPanel!
-    private var imageView: NSImageView!
+    private var imageView: PinContentView!
     private var currentScale: CGFloat
     private var currentAlpha: CGFloat
 
@@ -18,24 +18,31 @@ public final class PinPanelController: NSObject, NSWindowDelegate {
         self.currentScale = item.scale
         self.currentAlpha = item.alpha
         super.init()
+
         let panel = NSPanel(
             contentRect: item.frame,
-            styleMask: [.borderless, .nonactivatingPanel, .utilityWindow],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isMovable = true
         panel.isMovableByWindowBackground = true
         panel.backgroundColor = .clear
         panel.hasShadow = true
+        panel.hidesOnDeactivate = false
         panel.delegate = self
 
-        let imageView = NSImageView(frame: NSRect(origin: .zero, size: item.frame.size))
-        imageView.imageScaling = .scaleProportionallyUpOrDown
+        let imageView = PinContentView(frame: NSRect(origin: .zero, size: item.frame.size))
+        imageView.imageScaling = .scaleAxesIndependently
         imageView.image = NSImage(contentsOf: imageURL)
         imageView.wantsLayer = true
+        imageView.layer?.masksToBounds = true
+        imageView.onDoubleClick = { [weak self] in
+            self?.copyAndDestroy()
+        }
         panel.contentView = imageView
         panel.alphaValue = item.alpha
         panel.ignoresMouseEvents = item.ignoresMouse
@@ -54,13 +61,13 @@ public final class PinPanelController: NSObject, NSWindowDelegate {
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "关闭", action: #selector(closePin), keyEquivalent: "")
         menu.addItem(withTitle: "销毁", action: #selector(destroyPin), keyEquivalent: "")
-        for item in menu.items { item.target = self }
+        for menuItem in menu.items { menuItem.target = self }
         imageView.menu = menu
     }
 
     func show() {
         panel.setFrame(item.frame, display: true)
-        panel.orderFront(nil)
+        panel.orderFrontRegardless()
     }
 
     func close() {
@@ -68,7 +75,7 @@ public final class PinPanelController: NSObject, NSWindowDelegate {
     }
 
     func setVisible(_ visible: Bool) {
-        if visible { panel.orderFront(nil) } else { panel.orderOut(nil) }
+        if visible { panel.orderFrontRegardless() } else { panel.orderOut(nil) }
     }
 
     func setClickThrough(_ enabled: Bool) {
@@ -79,10 +86,22 @@ public final class PinPanelController: NSObject, NSWindowDelegate {
         currentScale = max(0.2, min(4, currentScale * (1 + g.magnification)))
         g.magnification = 0
         var f = panel.frame
-        let newSize = NSSize(width: item.frame.width * currentScale, height: item.frame.height * currentScale)
+        let base = item.frame.size
+        let newSize = NSSize(width: base.width * currentScale, height: base.height * currentScale)
+        let center = CGPoint(x: f.midX, y: f.midY)
         f.size = newSize
+        f.origin = CGPoint(x: center.x - newSize.width / 2, y: center.y - newSize.height / 2)
         panel.setFrame(f, display: true)
         imageView.frame = NSRect(origin: .zero, size: newSize)
+    }
+
+    /// 双击：复制到剪贴板并销毁贴图。
+    private func copyAndDestroy() {
+        if let img = imageView.image?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            try? ImageExporter().copyToClipboard(img)
+        }
+        try? store?.destroy(id: item.id)
+        Toast.shared.show("已复制")
     }
 
     @objc private func copyImage() {
@@ -103,11 +122,7 @@ public final class PinPanelController: NSObject, NSWindowDelegate {
     @objc private func toggleClickThrough() {
         let next = !panel.ignoresMouseEvents
         try? store?.setClickThrough(id: item.id, enabled: next)
-        if next {
-            Toast.shared.show("穿透已开")
-        } else {
-            Toast.shared.show("穿透已关")
-        }
+        Toast.shared.show(next ? "穿透已开" : "穿透已关")
     }
 
     @objc private func closePin() {
@@ -121,11 +136,26 @@ public final class PinPanelController: NSObject, NSWindowDelegate {
     public func windowWillClose(_ notification: Notification) {
         store?.panelDidClose(id: item.id)
     }
+
+    public func windowDidMove(_ notification: Notification) {
+        store?.updateFrame(id: item.id, frame: panel.frame)
+    }
 }
 
-/// 让 scrollWheel 到达 controller：用自定义 view
-extension PinPanelController {
-    func installScrollForwarder() {
-        // imageView already receives events via panel content
+/// 可拖动；双击复制并销毁。
+private final class PinContentView: NSImageView {
+    var onDoubleClick: (() -> Void)?
+
+    override var mouseDownCanMoveWindow: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            onDoubleClick?()
+            return
+        }
+        // 交给窗口拖动
+        super.mouseDown(with: event)
     }
 }

@@ -1,30 +1,56 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import QuartzCore
 
 public enum CaptureOverlayOutcome: Sendable {
     case cancelled
     case copied(CGImage)
     case saved(CGImage)
-    case pinned(CGImage)
+    case pinned(CGImage, frame: CGRect)
 }
 
-/// 截图遮罩：暗色 + 选区 + 窗口吸附 + 复制/保存/贴图。
-/// REQ: C-01, C-02, C-06
+/// 截图遮罩：图层化渲染 + 选区固定后标注工具条。
+/// REQ: C-01, C-02, C-06 / UI_SPEC §3
 @MainActor
-public final class CaptureOverlayController: NSObject {
+public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     public var onFinish: ((CaptureOverlayOutcome) -> Void)?
     public var annotationEnabled = true
+    public var autoCopyOnSelect = false
 
     private var panels: [OverlayPanel] = []
     private var frames: [ScreenFrame] = []
     private let geometry = ScreenGeometry()
     private let windows = WindowTracker()
     private let exporter = ImageExporter()
+    private let annotations = AnnotationController()
+
     private var selection: CaptureSelection?
-    private var dragStart: CGPoint?
+    private var selectionLocked = false
+    private var drag = OverlayDragSession()
     private var hoverWindow: WindowHit?
-    private weak var toolbar: CaptureToolbar?
+    private var toolbar: CaptureToolbar?
+    private var activeTool: CaptureAnnotateTool?
+    private var shapeStyle: CaptureShapeStyle = .rect
+    private var draftShape: Shape?
+    private var annotateStart: CGPoint?
+    private var moveGrabStart: CGPoint?
+    private var moveOriginRect: CGRect?
+
+    private var lastHoverSample = Date.distantPast
+    private let hoverInterval: TimeInterval = 1.0 / 30.0
+    private var keyMonitor: Any?
+    private var rightClickMonitor: Any?
+    private var isEditingText = false
+    private var pendingTextLocal: CGPoint?
+    private weak var textHostView: OverlayView?
+    private var editingShapeID: UUID?
+    private var draggingTextID: UUID?
+    private var dragTextStart: CGPoint?
+    private var dragTextOrigin: CGPoint?
+    private var textDragCheckpointed = false
+    private let textFontSize: CGFloat = 18
+    private let textColor = NSColor.systemRed
 
     public override init() {
         super.init()
@@ -33,75 +59,515 @@ public final class CaptureOverlayController: NSObject {
     public func present(frames: [ScreenFrame]) {
         dismiss()
         self.frames = frames
+        annotations.reset()
         for frame in frames {
             let panel = OverlayPanel(
                 contentRect: frame.logicalBounds,
-                styleMask: [.borderless, .nonactivatingPanel],
+                styleMask: [.borderless],
                 backing: .buffered,
                 defer: false
             )
+            panel.isFloatingPanel = true
+            panel.hidesOnDeactivate = false
             panel.level = .screenSaver
-            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
             panel.isOpaque = false
-            panel.backgroundColor = NSColor.clear
+            panel.backgroundColor = .clear
             panel.ignoresMouseEvents = false
             panel.acceptsMouseMovedEvents = true
             let view = OverlayView(frame: NSRect(origin: .zero, size: frame.logicalBounds.size))
             view.screenFrame = frame
             view.controller = self
+            view.installLayers()
             panel.contentView = view
             panel.setFrame(frame.logicalBounds, display: true)
-            panel.makeKeyAndOrderFront(nil as Any?)
+            panel.orderFrontRegardless()
             panels.append(panel)
         }
         NSApp.activate(ignoringOtherApps: true)
+        panels.first?.makeKeyAndOrderFront(nil)
+        panels.first.flatMap { ($0.contentView as? OverlayView) }?.window?.makeFirstResponder(panels.first?.contentView)
+        installEscapeHatches()
+        syncLayers()
     }
 
     public func dismiss() {
-        toolbar?.close()
+        closeTextEditor(commit: false)
+        removeEscapeHatches()
+        toolbar?.orderOut(nil)
         toolbar = nil
-        panels.forEach { $0.orderOut(nil) }
+        panels.forEach { $0.orderOut(nil); $0.close() }
         panels.removeAll()
         selection = nil
-        dragStart = nil
+        selectionLocked = false
+        drag.reset()
+        hoverWindow = nil
+        activeTool = nil
+        shapeStyle = .rect
+        draftShape = nil
+        annotateStart = nil
+        moveGrabStart = nil
+        moveOriginRect = nil
     }
 
-    fileprivate func mouseDown(at global: CGPoint) {
-        dragStart = global
-        hoverWindow = nil
-        if let hit = windows.hit(at: global) {
-            selection = geometry.clampToSingleScreen(hit.logicalBounds)
-            refreshViews()
-            showToolbar()
+    private func installEscapeHatches() {
+        removeEscapeHatches()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            if self.isEditingText {
+                if event.keyCode == 53 {
+                    self.closeTextEditor(commit: false)
+                    return nil
+                }
+                return event
+            }
+            if event.keyCode == 53 {
+                self.handleEscape()
+                return nil
+            }
+            let cmd = event.modifierFlags.contains(.command)
+            switch event.keyCode {
+            case 36, 76:
+                self.commitCopy()
+                return nil
+            case 8 where cmd:
+                self.commitCopy()
+                return nil
+            case 1 where cmd:
+                self.commitSave()
+                return nil
+            case 6 where cmd:
+                self.toolbarUndo()
+                return nil
+            case 17 where cmd:
+                self.commitPin()
+                return nil
+            default:
+                return event
+            }
+        }
+        rightClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] _ in
+            guard let self, !self.isEditingText else { return nil }
+            self.cancel()
+            return nil
+        }
+    }
+
+    private func removeEscapeHatches() {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
+        if let rightClickMonitor {
+            NSEvent.removeMonitor(rightClickMonitor)
+            self.rightClickMonitor = nil
+        }
+    }
+
+    private func handleEscape() {
+        if isEditingText {
+            closeTextEditor(commit: false)
             return
         }
+        if selectionLocked, activeTool != nil {
+            activeTool = nil
+            toolbar?.setSelectedTool(nil)
+            draftShape = nil
+            syncLayers()
+        } else {
+            cancel()
+        }
+    }
+
+    // MARK: - Mouse (from OverlayView)
+
+    fileprivate func mouseDown(at global: CGPoint) {
+        if isEditingText {
+            // 点在输入框外：提交当前文字
+            finishTextInput(textHostView?.currentText() ?? "")
+            return
+        }
+        if selectionLocked {
+            handleAnnotateMouseDown(at: global)
+            return
+        }
+        hideToolbar()
+        let hit = windows.hit(at: global)
+        drag.mouseDown(at: global, windowBounds: hit?.logicalBounds)
         selection = nil
-        refreshViews()
+        hoverWindow = hit
+        syncLayers()
     }
 
     fileprivate func mouseDragged(at global: CGPoint) {
-        guard let start = dragStart else { return }
-        let rect = CGRect(
-            x: min(start.x, global.x),
-            y: min(start.y, global.y),
-            width: abs(start.x - global.x),
-            height: abs(start.y - global.y)
-        )
+        if selectionLocked {
+            handleAnnotateMouseDragged(at: global)
+            return
+        }
+        guard let rect = drag.mouseDragged(at: global) else { return }
+        hoverWindow = nil
         selection = geometry.clampToSingleScreen(rect)
-        refreshViews()
+        syncLayers()
     }
 
     fileprivate func mouseUp(at global: CGPoint) {
-        mouseDragged(at: global)
-        if selection != nil { showToolbar() }
-        dragStart = nil
+        if selectionLocked {
+            handleAnnotateMouseUp(at: global)
+            return
+        }
+        switch drag.mouseUp(at: global) {
+        case .region(let rect):
+            selection = geometry.clampToSingleScreen(rect)
+            hoverWindow = nil
+            syncLayers()
+            if selection != nil { finishSelection() }
+        case .window(let bounds):
+            selection = geometry.clampToSingleScreen(bounds)
+            hoverWindow = nil
+            syncLayers()
+            if selection != nil { finishSelection() }
+        case .none:
+            selection = nil
+            syncLayers()
+        }
     }
 
     fileprivate func mouseMoved(at global: CGPoint) {
-        guard dragStart == nil else { return }
-        hoverWindow = windows.hit(at: global)
-        refreshViews()
+        updateCursor(at: global)
+        guard !selectionLocked, drag.dragStart == nil else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastHoverSample) >= hoverInterval else { return }
+        lastHoverSample = now
+        let hit = windows.hit(at: global)
+        if hit?.windowID != hoverWindow?.windowID || hit?.logicalBounds != hoverWindow?.logicalBounds {
+            hoverWindow = hit
+            syncLayers()
+        }
     }
+
+    fileprivate func updateCursor(at global: CGPoint) {
+        if draggingTextID != nil {
+            NSCursor.closedHand.set()
+            return
+        }
+        guard selectionLocked, activeTool == .text, let sel = selection, sel.logicalRect.contains(global) else {
+            NSCursor.arrow.set()
+            return
+        }
+        let local = toSelectionLocal(global)
+        if hitTextShape(at: local) != nil {
+            NSCursor.openHand.set()
+        } else {
+            // 文字工具空白处：I 型光标，提示可输入
+            NSCursor.iBeam.set()
+        }
+    }
+
+    fileprivate func mouseDoubleClick(at global: CGPoint) {
+        guard selectionLocked, let sel = selection, sel.logicalRect.contains(global) else { return }
+        commitCopy()
+    }
+
+    private func finishSelection() {
+        if autoCopyOnSelect {
+            commitCopy()
+            return
+        }
+        selectionLocked = true
+        showToolbar()
+        syncLayers()
+    }
+
+    // MARK: - Annotate
+
+    private func handleAnnotateMouseDown(at global: CGPoint) {
+        guard let sel = selection, sel.logicalRect.contains(global) else {
+            // 点在选区外：重新框选
+            selectionLocked = false
+            annotations.reset()
+            hideToolbar()
+            let hit = windows.hit(at: global)
+            drag.mouseDown(at: global, windowBounds: hit?.logicalBounds)
+            selection = nil
+            hoverWindow = hit
+            draftShape = nil
+            moveGrabStart = nil
+            moveOriginRect = nil
+            syncLayers()
+            return
+        }
+        // 未选标注工具时：拖动移动选区
+        if activeTool == nil {
+            moveGrabStart = global
+            moveOriginRect = sel.logicalRect
+            return
+        }
+
+        let local = toSelectionLocal(global)
+
+        // 文字工具：点中已有文字 → 拖动或再次编辑
+        if activeTool == .text, let hit = hitTextShape(at: local) {
+            draggingTextID = hit.id
+            dragTextStart = local
+            dragTextOrigin = hit.points.first
+            editingShapeID = hit.id
+            textDragCheckpointed = false
+            annotateStart = nil
+            NSCursor.closedHand.set()
+            return
+        }
+
+        annotateStart = local
+        if activeTool == .text {
+            editingShapeID = nil
+            promptText(at: local, existing: nil)
+            return
+        }
+        guard let kind = currentShapeKind() else { return }
+        draftShape = Shape(kind: kind, lineWidth: activeTool == .pen ? 3 : 2, points: [local])
+        syncLayers()
+    }
+
+    private func handleAnnotateMouseDragged(at global: CGPoint) {
+        if let id = draggingTextID, let start = dragTextStart, let origin = dragTextOrigin {
+            let local = toSelectionLocal(global)
+            let dx = local.x - start.x
+            let dy = local.y - start.y
+            if abs(dx) > 1 || abs(dy) > 1 {
+                if !textDragCheckpointed {
+                    annotations.prepareUndoCheckpoint()
+                    textDragCheckpointed = true
+                }
+                if var shape = annotations.document.shapes.first(where: { $0.id == id }) {
+                    shape.points = [CGPoint(x: origin.x + dx, y: origin.y + dy)]
+                    annotations.setShapeLive(shape)
+                    syncLayers()
+                }
+                NSCursor.closedHand.set()
+            }
+            return
+        }
+        if let grab = moveGrabStart, let origin = moveOriginRect, activeTool == nil {
+            let dx = global.x - grab.x
+            let dy = global.y - grab.y
+            let moved = origin.offsetBy(dx: dx, dy: dy)
+            if let next = geometry.clampToSingleScreen(moved) {
+                // 保持原尺寸，仅平移（clamp 可能裁切时尽量贴边）
+                var rect = CGRect(origin: next.logicalRect.origin, size: origin.size)
+                if let screen = geometry.screen(id: next.screenID) {
+                    rect.origin.x = min(max(rect.origin.x, screen.logicalFrame.minX),
+                                        screen.logicalFrame.maxX - rect.width)
+                    rect.origin.y = min(max(rect.origin.y, screen.logicalFrame.minY),
+                                        screen.logicalFrame.maxY - rect.height)
+                    selection = CaptureSelection(screenID: next.screenID, logicalRect: rect)
+                } else {
+                    selection = next
+                }
+                showToolbar()
+                syncLayers()
+            }
+            return
+        }
+        guard var draft = draftShape, let start = annotateStart, activeTool != nil else { return }
+        let local = toSelectionLocal(global)
+        if draft.kind == .freehand {
+            draft.points.append(local)
+        } else {
+            draft.points = [start, local]
+        }
+        draftShape = draft
+        syncLayers()
+    }
+
+    private func handleAnnotateMouseUp(at global: CGPoint) {
+        if let id = draggingTextID {
+            let local = toSelectionLocal(global)
+            let moved = textDragCheckpointed
+            draggingTextID = nil
+            dragTextStart = nil
+            dragTextOrigin = nil
+            textDragCheckpointed = false
+            if !moved, let shape = annotations.document.shapes.first(where: { $0.id == id }) {
+                promptText(at: shape.points.first ?? local, existing: shape)
+            } else {
+                updateCursor(at: global)
+            }
+            return
+        }
+        if moveGrabStart != nil {
+            moveGrabStart = nil
+            moveOriginRect = nil
+            return
+        }
+        guard var draft = draftShape else {
+            annotateStart = nil
+            return
+        }
+        let local = toSelectionLocal(global)
+        if draft.kind == .freehand {
+            draft.points.append(local)
+        } else if let start = annotateStart {
+            draft.points = [start, local]
+        }
+        if draft.kind != .freehand {
+            let pts = draft.points
+            if pts.count >= 2 {
+                let dx = abs(pts[0].x - pts[1].x)
+                let dy = abs(pts[0].y - pts[1].y)
+                if dx < 2, dy < 2 {
+                    draftShape = nil
+                    annotateStart = nil
+                    syncLayers()
+                    return
+                }
+            }
+        }
+        annotations.add(draft)
+        draftShape = nil
+        annotateStart = nil
+        syncLayers()
+    }
+
+    private func hitTextShape(at local: CGPoint) -> Shape? {
+        for shape in annotations.document.shapes.reversed() where shape.kind == .text {
+            let rect = AnnotationController.textFrame(shape).insetBy(dx: -6, dy: -6)
+            if rect.contains(local) { return shape }
+        }
+        return nil
+    }
+
+    private func promptText(at local: CGPoint, existing: Shape?) {
+        closeTextEditor(commit: false)
+        guard let sel = selection else { return }
+        pendingTextLocal = local
+        editingShapeID = existing?.id
+        isEditingText = true
+
+        for panel in panels {
+            guard let view = panel.contentView as? OverlayView,
+                  view.screenFrame?.screenID == sel.screenID
+            else { continue }
+            panel.makeKeyAndOrderFront(nil)
+            view.beginTextInput(
+                selectionLocal: local,
+                selectionGlobal: sel.logicalRect,
+                fontSize: existing?.lineWidth ?? textFontSize,
+                color: existing?.nsColor ?? textColor,
+                initial: existing?.text ?? "",
+                onCommit: { [weak self] text in self?.finishTextInput(text) },
+                onCancel: { [weak self] in self?.closeTextEditor(commit: false); self?.syncLayers() }
+            )
+            textHostView = view
+            annotateStart = nil
+            // 编辑时隐藏原文，避免叠字
+            syncLayersHidingText(editingShapeID)
+            return
+        }
+        isEditingText = false
+        pendingTextLocal = nil
+        editingShapeID = nil
+    }
+
+    private func finishTextInput(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let point = pendingTextLocal
+        let editID = editingShapeID
+        closeTextEditor(commit: false)
+        guard let point else {
+            syncLayers()
+            return
+        }
+        if trimmed.isEmpty {
+            if let editID { annotations.remove(id: editID) }
+            syncLayers()
+            return
+        }
+        if let editID, var shape = annotations.document.shapes.first(where: { $0.id == editID }) {
+            shape.text = trimmed
+            shape.points = [point]
+            shape.lineWidth = textFontSize
+            annotations.replace(shape)
+        } else {
+            annotations.add(Shape(
+                kind: .text,
+                lineWidth: textFontSize,
+                points: [point],
+                text: trimmed,
+                color: textColor
+            ))
+        }
+        syncLayers()
+    }
+
+    private func closeTextEditor(commit: Bool) {
+        textHostView?.endTextInput()
+        textHostView = nil
+        isEditingText = false
+        pendingTextLocal = nil
+        annotateStart = nil
+        editingShapeID = nil
+    }
+
+    /// 再编辑时隐藏原文，避免与输入框叠字
+    private func syncLayersHidingText(_ hideID: UUID?) {
+        for panel in panels {
+            (panel.contentView as? OverlayView)?.apply(
+                selection: selection,
+                hover: selectionLocked ? nil : hoverWindow,
+                shapes: annotations.document.shapes.filter { $0.id != hideID },
+                draft: draftShape,
+                locked: selectionLocked
+            )
+        }
+    }
+
+    private func toSelectionLocal(_ global: CGPoint) -> CGPoint {
+        guard let sel = selection else { return global }
+        return CGPoint(x: global.x - sel.logicalRect.minX, y: global.y - sel.logicalRect.minY)
+    }
+
+    // MARK: - Toolbar delegate
+
+    private func currentShapeKind() -> ShapeKind? {
+        switch activeTool {
+        case .shape:
+            return shapeStyle == .ellipse ? .ellipse : .rect
+        case .arrow: return .arrow
+        case .pen: return .freehand
+        case .mosaic: return .mosaic
+        case .text: return .text
+        case .none: return nil
+        }
+    }
+
+    func toolbarSelectTool(_ tool: CaptureAnnotateTool?) {
+        closeTextEditor(commit: false)
+        activeTool = tool
+        if let sel = selection {
+            updateCursor(at: CGPoint(x: sel.logicalRect.midX, y: sel.logicalRect.midY))
+        } else {
+            NSCursor.arrow.set()
+        }
+    }
+
+    func toolbarSelectShapeStyle(_ style: CaptureShapeStyle) {
+        shapeStyle = style
+        activeTool = .shape
+    }
+
+    func toolbarUndo() {
+        closeTextEditor(commit: false)
+        annotations.undo()
+        draftShape = nil
+        syncLayers()
+    }
+
+    func toolbarCopy() { commitCopy() }
+    func toolbarSave() { commitSave() }
+    func toolbarPin() { commitPin() }
+    func toolbarClose() { cancel() }
+
+    // MARK: - Commit
 
     fileprivate func cancel() {
         dismiss()
@@ -109,14 +575,14 @@ public final class CaptureOverlayController: NSObject {
     }
 
     fileprivate func commitCopy() {
-        guard let image = croppedImage() else { return }
+        guard let image = exportImage() else { return }
         try? exporter.copyToClipboard(image)
         dismiss()
         onFinish?(.copied(image))
     }
 
     fileprivate func commitSave() {
-        guard let image = croppedImage() else { return }
+        guard let image = exportImage() else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = FilenameTemplate.default.render(width: image.width, height: image.height) + ".png"
@@ -127,88 +593,384 @@ public final class CaptureOverlayController: NSObject {
     }
 
     fileprivate func commitPin() {
-        guard let image = croppedImage() else { return }
+        guard let image = exportImage(), let selection else { return }
+        let frame = selection.logicalRect
         dismiss()
-        onFinish?(.pinned(image))
+        onFinish?(.pinned(image, frame: frame))
     }
 
-    private func croppedImage() -> CGImage? {
+    private func exportImage() -> CGImage? {
         guard let selection,
-              let frame = frames.first(where: { $0.screenID == selection.screenID })
+              let frame = frames.first(where: { $0.screenID == selection.screenID }),
+              let base = exporter.crop(frame: frame, selection: selection, geometry: geometry)
         else { return nil }
-        return exporter.crop(frame: frame, selection: selection, geometry: geometry)
+        let scaled = annotationsScaledToPixels(scale: frame.scale)
+        let ctrl = AnnotationController()
+        for s in scaled.shapes { ctrl.add(s) }
+        return ctrl.exportFlattened(base: base) ?? base
     }
 
-    private func refreshViews() {
-        for panel in panels {
-            (panel.contentView as? OverlayView)?.needsDisplay = true
+    private func annotationsScaledToPixels(scale: CGFloat) -> AnnotationDocument {
+        var doc = AnnotationDocument()
+        let all = annotations.document.shapes + (draftShape.map { [$0] } ?? [])
+        for shape in all {
+            var s = shape
+            s.points = shape.points.map { CGPoint(x: $0.x * scale, y: $0.y * scale) }
+            s.lineWidth = shape.lineWidth * scale
+            doc.shapes.append(s)
         }
+        return doc
     }
+
+    // MARK: - Toolbar / layers
 
     private func showToolbar() {
         guard let selection else { return }
-        toolbar?.close()
-        let bar = CaptureToolbar(controller: self)
-        let x = selection.logicalRect.midX - 140
-        let y = max(selection.logicalRect.minY - 48, 8)
-        bar.setFrameOrigin(NSPoint(x: x, y: y))
-        bar.makeKeyAndOrderFront(nil)
+        hideToolbar()
+        let bar = CaptureToolbar()
+        bar.actionHandler = self
+        bar.setShapeStyle(shapeStyle)
+        bar.setSelectedTool(activeTool)
+        if let screen = geometry.screen(id: selection.screenID) {
+            bar.place(under: selection.logicalRect, inScreenBounds: screen.logicalFrame)
+        } else {
+            bar.setFrameOrigin(NSPoint(x: selection.logicalRect.midX - bar.width / 2, y: selection.logicalRect.minY - bar.height - 2))
+            bar.orderFrontRegardless()
+        }
         toolbar = bar
     }
 
+    private func hideToolbar() {
+        toolbar?.orderOut(nil)
+        toolbar = nil
+    }
+
+    private func syncLayers() {
+        for panel in panels {
+            (panel.contentView as? OverlayView)?.apply(
+                selection: selection,
+                hover: selectionLocked ? nil : hoverWindow,
+                shapes: annotations.document.shapes,
+                draft: draftShape,
+                locked: selectionLocked
+            )
+        }
+    }
+
+    fileprivate func keyDown(_ event: NSEvent) {
+        switch event.keyCode {
+        case 53: // Esc — 由 monitor 的 handleEscape 处理；保留兼容
+            handleEscape()
+        case 36, 76: commitCopy()
+        case 8 where event.modifierFlags.contains(.command): commitCopy()
+        case 1 where event.modifierFlags.contains(.command): commitSave()
+        case 6 where event.modifierFlags.contains(.command):
+            toolbarUndo()
+        case 17 where event.modifierFlags.contains(.command):
+            commitPin()
+        default: break
+        }
+    }
+
     fileprivate var currentSelection: CaptureSelection? { selection }
-    fileprivate var currentHover: WindowHit? { hoverWindow }
 }
+
+// MARK: - Panel / View
 
 private final class OverlayPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
 @MainActor
-private final class OverlayView: NSView {
+private final class OverlayView: NSView, NSTextFieldDelegate {
     weak var controller: CaptureOverlayController?
     var screenFrame: ScreenFrame?
 
+    private let imageLayer = CALayer()
+    private let dimLayer = CAShapeLayer()
+    private let hoverLayer = CAShapeLayer()
+    private let selectionBorder = CAShapeLayer()
+    private let annotationLayer = CALayer()
+    private var tracking: NSTrackingArea?
+
+    private var textField: NSTextField?
+    private var onTextCommit: ((String) -> Void)?
+    private var onTextCancel: (() -> Void)?
+
     override var acceptsFirstResponder: Bool { true }
-    override func viewDidMoveToWindow() {
-        window?.makeFirstResponder(self)
-    }
+    override var isFlipped: Bool { false }
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard let screenFrame else { return }
-        let ctx = NSGraphicsContext.current?.cgContext
-        let nsImage = NSImage(cgImage: screenFrame.image, size: bounds.size)
-        nsImage.draw(in: bounds)
+    func currentText() -> String { textField?.stringValue ?? "" }
 
-        NSColor.black.withAlphaComponent(0.5).setFill()
-        bounds.fill()
+    func beginTextInput(
+        selectionLocal: CGPoint,
+        selectionGlobal: CGRect,
+        fontSize: CGFloat,
+        color: NSColor,
+        initial: String,
+        onCommit: @escaping (String) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        endTextInput()
+        onTextCommit = onCommit
+        onTextCancel = onCancel
 
-        if let sel = controller?.currentSelection, sel.screenID == screenFrame.screenID {
-            let local = convertFromGlobal(sel.logicalRect)
-            nsImage.draw(in: local, from: local, operation: .copy, fraction: 1)
-            NSColor.white.setStroke()
-            let path = NSBezierPath(rect: local)
-            path.lineWidth = 2
-            path.stroke()
-            let label = "\(Int(sel.logicalRect.width * screenFrame.scale)) × \(Int(sel.logicalRect.height * screenFrame.scale))"
-            let attrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: NSColor.white,
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium),
-                .backgroundColor: NSColor.black.withAlphaComponent(0.6),
-            ]
-            (label as NSString).draw(at: CGPoint(x: local.minX + 4, y: local.maxY - 18), withAttributes: attrs)
-        } else if let hover = controller?.currentHover {
-            let local = convertFromGlobal(hover.logicalBounds)
-            if bounds.intersects(local) {
-                NSColor.controlAccentColor.withAlphaComponent(0.25).setFill()
-                local.fill()
-                NSColor.controlAccentColor.setStroke()
-                let path = NSBezierPath(rect: local)
-                path.lineWidth = 2
-                path.stroke()
+        let selLocal = convertFromGlobal(selectionGlobal)
+        let origin = CGPoint(x: selLocal.minX + selectionLocal.x, y: selLocal.minY + selectionLocal.y)
+        let font = AnnotationController.textFont(size: fontSize)
+        let height = ceil(font.ascender - font.descender) + 6
+        let width = min(360, max(120, bounds.width - origin.x - 8))
+
+        let field = NSTextField(frame: CGRect(x: origin.x, y: origin.y, width: width, height: height))
+        field.font = font
+        field.textColor = color
+        field.stringValue = initial
+        field.placeholderString = ""
+        field.drawsBackground = false
+        field.backgroundColor = .clear
+        field.isBordered = false
+        field.isBezeled = false
+        field.focusRingType = .none
+        if let cell = field.cell as? NSTextFieldCell {
+            cell.drawsBackground = false
+            cell.backgroundColor = .clear
+        }
+        field.delegate = self
+        field.target = self
+        field.action = #selector(commitTextField)
+        addSubview(field)
+        textField = field
+
+        window?.makeKeyAndOrderFront(nil)
+        window?.makeFirstResponder(field)
+        DispatchQueue.main.async { [weak self, weak field] in
+            guard let self, let field else { return }
+            self.window?.makeFirstResponder(field)
+            // 截图像素偏暗时系统默认黑光标几乎看不见，跟文字同色
+            if let editor = field.currentEditor() as? NSTextView {
+                editor.insertionPointColor = color
+            }
+            if !initial.isEmpty {
+                field.currentEditor()?.selectedRange = NSRange(location: initial.count, length: 0)
             }
         }
-        _ = ctx
+    }
+
+    func endTextInput() {
+        textField?.delegate = nil
+        textField?.removeFromSuperview()
+        textField = nil
+        onTextCommit = nil
+        onTextCancel = nil
+    }
+
+    @objc private func commitTextField() {
+        let text = textField?.stringValue ?? ""
+        onTextCommit?(text)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            commitTextField()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            onTextCancel?()
+            return true
+        }
+        return false
+    }
+
+    override func viewDidMoveToWindow() {
+        window?.makeFirstResponder(self)
+        updateTrackingAreas()
+    }
+
+    override func layout() {
+        super.layout()
+        imageLayer.frame = bounds
+        dimLayer.frame = bounds
+        hoverLayer.frame = bounds
+        selectionBorder.frame = bounds
+        annotationLayer.frame = bounds
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseMoved, .inVisibleRect, .enabledDuringMouseDrag],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    func installLayers() {
+        wantsLayer = true
+        layer = CALayer()
+        layer?.backgroundColor = NSColor.clear.cgColor
+
+        imageLayer.contentsGravity = .resize
+        imageLayer.frame = bounds
+        // 直接用 NSImage 承载 CGImage，不做额外 Y 翻转（翻转会导致整屏颠倒）
+        if let cg = screenFrame?.image {
+            imageLayer.contents = NSImage(cgImage: cg, size: bounds.size)
+        }
+
+        // 仅选区外变暗；选区内完全透明、无蒙版色
+        dimLayer.fillColor = NSColor.black.withAlphaComponent(0.45).cgColor
+        dimLayer.fillRule = .evenOdd
+        dimLayer.frame = bounds
+        dimLayer.allowsEdgeAntialiasing = true
+
+        // 窗口悬停：仅描边提示可吸附，不加蓝色填充蒙版
+        hoverLayer.fillColor = nil
+        hoverLayer.strokeColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        hoverLayer.lineWidth = 2
+        hoverLayer.lineDashPattern = [6, 4]
+        hoverLayer.frame = bounds
+        hoverLayer.isHidden = true
+
+        selectionBorder.fillColor = nil
+        selectionBorder.strokeColor = NSColor.white.cgColor
+        selectionBorder.lineWidth = 2
+        selectionBorder.frame = bounds
+
+        annotationLayer.frame = bounds
+        annotationLayer.masksToBounds = false
+
+        layer?.addSublayer(imageLayer)
+        layer?.addSublayer(dimLayer)
+        layer?.addSublayer(hoverLayer)
+        layer?.addSublayer(selectionBorder)
+        layer?.addSublayer(annotationLayer)
+
+        let path = CGMutablePath()
+        path.addRect(bounds)
+        dimLayer.path = path
+    }
+
+    func apply(
+        selection: CaptureSelection?,
+        hover: WindowHit?,
+        shapes: [Shape],
+        draft: Shape?,
+        locked: Bool
+    ) {
+        guard let screenFrame else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        let dimPath = CGMutablePath()
+        dimPath.addRect(bounds)
+
+        if let sel = selection, sel.screenID == screenFrame.screenID {
+            let local = convertFromGlobal(sel.logicalRect)
+            dimPath.addRect(local)
+            selectionBorder.path = CGPath(rect: local, transform: nil)
+            selectionBorder.isHidden = false
+            renderAnnotations(shapes: shapes, draft: draft, in: local)
+        } else {
+            selectionBorder.path = nil
+            selectionBorder.isHidden = true
+            annotationLayer.sublayers = nil
+        }
+
+        dimLayer.path = dimPath
+
+        if let hover, !locked {
+            let local = convertFromGlobal(hover.logicalBounds)
+            if bounds.intersects(local) {
+                hoverLayer.path = CGPath(rect: local, transform: nil)
+                hoverLayer.isHidden = false
+            } else {
+                hoverLayer.isHidden = true
+            }
+        } else {
+            hoverLayer.isHidden = true
+        }
+
+        CATransaction.commit()
+    }
+
+    private func renderAnnotations(shapes: [Shape], draft: Shape?, in selectionLocal: CGRect) {
+        annotationLayer.sublayers = nil
+        let all = shapes + (draft.map { [$0] } ?? [])
+        for shape in all {
+            guard let shapeLayer = makeShapeLayer(shape, origin: selectionLocal.origin) else { continue }
+            annotationLayer.addSublayer(shapeLayer)
+        }
+    }
+
+    private func makeShapeLayer(_ shape: Shape, origin: CGPoint) -> CALayer? {
+        let pts = shape.points.map { CGPoint(x: $0.x + origin.x, y: $0.y + origin.y) }
+        guard let first = pts.first else { return nil }
+        let color = shape.nsColor.cgColor
+        let layer = CAShapeLayer()
+        layer.strokeColor = color
+        layer.fillColor = nil
+        layer.lineWidth = shape.lineWidth
+        layer.lineJoin = .round
+        layer.lineCap = .round
+
+        switch shape.kind {
+        case .rect:
+            guard let last = pts.last else { return nil }
+            let r = CGRect(x: min(first.x, last.x), y: min(first.y, last.y),
+                           width: abs(last.x - first.x), height: abs(last.y - first.y))
+            layer.path = CGPath(rect: r, transform: nil)
+        case .ellipse:
+            guard let last = pts.last else { return nil }
+            let r = CGRect(x: min(first.x, last.x), y: min(first.y, last.y),
+                           width: abs(last.x - first.x), height: abs(last.y - first.y))
+            layer.path = CGPath(ellipseIn: r, transform: nil)
+        case .line, .arrow, .freehand:
+            let path = CGMutablePath()
+            path.move(to: first)
+            for p in pts.dropFirst() { path.addLine(to: p) }
+            if shape.kind == .arrow, let last = pts.last {
+                let angle = atan2(last.y - first.y, last.x - first.x)
+                let len: CGFloat = 12
+                path.move(to: last)
+                path.addLine(to: CGPoint(x: last.x + cos(angle + .pi * 0.8) * len, y: last.y + sin(angle + .pi * 0.8) * len))
+                path.move(to: last)
+                path.addLine(to: CGPoint(x: last.x + cos(angle - .pi * 0.8) * len, y: last.y + sin(angle - .pi * 0.8) * len))
+            }
+            layer.path = path
+        case .mosaic, .blur, .highlight:
+            guard let last = pts.last else { return nil }
+            let r = CGRect(x: min(first.x, last.x), y: min(first.y, last.y),
+                           width: abs(last.x - first.x), height: abs(last.y - first.y))
+            layer.path = CGPath(rect: r, transform: nil)
+            layer.fillColor = shape.kind == .highlight
+                ? shape.nsColor.withAlphaComponent(0.35).cgColor
+                : NSColor.black.withAlphaComponent(0.35).cgColor
+            layer.strokeColor = NSColor.white.withAlphaComponent(0.5).cgColor
+        case .text:
+            let text = shape.text ?? ""
+            guard !text.isEmpty else { return nil }
+            let fontSize = max(12, shape.lineWidth)
+            let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+            guard let cg = AnnotationController.makeTextCGImage(
+                text: text,
+                color: shape.nsColor,
+                fontSize: fontSize,
+                scale: scale
+            ) else { return nil }
+            let size = AnnotationController.textSize(text: text, fontSize: fontSize)
+            let textLayer = CALayer()
+            textLayer.contents = cg
+            textLayer.contentsGravity = .resize
+            textLayer.contentsScale = scale
+            textLayer.frame = CGRect(origin: first, size: size)
+            return textLayer
+        case .number:
+            return nil
+        }
+        return layer
     }
 
     private func convertFromGlobal(_ rect: CGRect) -> CGRect {
@@ -229,7 +991,12 @@ private final class OverlayView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        controller?.mouseDown(at: global(from: convert(event.locationInWindow, from: nil)))
+        let p = global(from: convert(event.locationInWindow, from: nil))
+        if event.clickCount >= 2 {
+            controller?.mouseDoubleClick(at: p)
+        } else {
+            controller?.mouseDown(at: p)
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -244,69 +1011,18 @@ private final class OverlayView: NSView {
         controller?.mouseMoved(at: global(from: convert(event.locationInWindow, from: nil)))
     }
 
+    override func cursorUpdate(with event: NSEvent) {
+        controller?.updateCursor(at: global(from: convert(event.locationInWindow, from: nil)))
+    }
+
+    override func resetCursorRects() {
+        // 交给 mouseMoved / cursorUpdate 动态设置
+    }
+
     override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 53: controller?.cancel() // Esc
-        case 36, 76: controller?.commitCopy() // Return
-        case 8 where event.modifierFlags.contains(.command): controller?.commitCopy() // ⌘C
-        case 1 where event.modifierFlags.contains(.command): controller?.commitSave() // ⌘S
-        default: super.keyDown(with: event)
-        }
+        // 输入文字时交给系统，不走截图快捷键
+        if textField != nil { return }
+        controller?.keyDown(event)
     }
 }
 
-@MainActor
-private final class CaptureToolbar: NSPanel {
-    private weak var controller: CaptureOverlayController?
-
-    init(controller: CaptureOverlayController) {
-        self.controller = controller
-        super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 280, height: 40),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        isFloatingPanel = true
-        level = .screenSaver
-        isOpaque = false
-        backgroundColor = .clear
-        hasShadow = true
-
-        let blur = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 280, height: 40))
-        blur.material = .hudWindow
-        blur.state = .active
-        blur.wantsLayer = true
-        blur.layer?.cornerRadius = 8
-
-        let stack = NSStackView()
-        stack.orientation = .horizontal
-        stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        blur.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: blur.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
-        ])
-
-        stack.addArrangedSubview(button("复制", #selector(copyAction)))
-        stack.addArrangedSubview(button("保存", #selector(saveAction)))
-        stack.addArrangedSubview(button("贴图", #selector(pinAction)))
-        stack.addArrangedSubview(button("关闭", #selector(closeAction)))
-        contentView = blur
-    }
-
-    private func button(_ title: String, _ sel: Selector) -> NSButton {
-        let b = NSButton(title: title, target: self, action: sel)
-        b.bezelStyle = .rounded
-        return b
-    }
-
-    @objc private func copyAction() { controller?.commitCopy() }
-    @objc private func saveAction() { controller?.commitSave() }
-    @objc private func pinAction() { controller?.commitPin() }
-    @objc private func closeAction() { controller?.cancel() }
-}

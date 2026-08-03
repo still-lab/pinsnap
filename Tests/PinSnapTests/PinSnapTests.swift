@@ -86,6 +86,31 @@ final class FilenameTemplateTests: XCTestCase {
     }
 }
 
+final class OverlayDragSessionTests: XCTestCase {
+    func testDragBecomesRegionEvenWhenWindowPending() {
+        var session = OverlayDragSession()
+        session.mouseDown(at: CGPoint(x: 100, y: 100), windowBounds: CGRect(x: 0, y: 0, width: 800, height: 600))
+        XCTAssertNil(session.mouseDragged(at: CGPoint(x: 102, y: 101)))
+        let mid = session.mouseDragged(at: CGPoint(x: 180, y: 160))
+        XCTAssertEqual(mid?.width, 80)
+        XCTAssertEqual(mid?.height, 60)
+        let result = session.mouseUp(at: CGPoint(x: 200, y: 180))
+        guard case .region(let rect) = result else {
+            return XCTFail("expected region, got \(result)")
+        }
+        XCTAssertEqual(rect.width, 100)
+        XCTAssertEqual(rect.height, 80)
+    }
+
+    func testClickWithoutDragSelectsWindow() {
+        var session = OverlayDragSession()
+        let window = CGRect(x: 10, y: 10, width: 400, height: 300)
+        session.mouseDown(at: CGPoint(x: 50, y: 50), windowBounds: window)
+        let result = session.mouseUp(at: CGPoint(x: 51, y: 50))
+        XCTAssertEqual(result, .window(window))
+    }
+}
+
 final class ScrollStitchTests: XCTestCase {
     func testSingleImage() {
         let img = CGImage.makeSolid(width: 10, height: 10)!

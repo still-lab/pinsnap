@@ -32,11 +32,11 @@ public final class SessionCoordinator {
         }
     }
 
-    public func beginCapture() {
-        Task { await beginCaptureAsync() }
+    public func beginCapture(autoCopy: Bool = false) {
+        Task { await beginCaptureAsync(autoCopy: autoCopy) }
     }
 
-    public func beginCaptureAsync() async {
+    public func beginCaptureAsync(autoCopy: Bool = false) async {
         guard state == .idle || state == .preparing else { return }
         state = .preparing
         if !ScreenPermission.isTrusted() {
@@ -50,6 +50,7 @@ public final class SessionCoordinator {
         do {
             state = .capturing
             let frames = try await capture.captureStillFrames()
+            overlay.autoCopyOnSelect = autoCopy
             overlay.present(frames: frames)
         } catch CaptureError.permissionDenied {
             state = .idle
@@ -59,6 +60,17 @@ public final class SessionCoordinator {
             Toast.shared.show(error.localizedDescription)
             PinSnapLog.capture.error("capture failed: \(error.localizedDescription)")
         }
+    }
+
+    public func clearCaptureHistory() {
+        lastSelectionImage = nil
+        Toast.shared.show("已清空")
+    }
+
+    public func openLastSaveDirectory() {
+        let dir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+        NSWorkspace.shared.open(dir)
     }
 
     public func beginPasteFromClipboard() {
@@ -101,10 +113,10 @@ public final class SessionCoordinator {
         case .saved(let image):
             lastSelectionImage = image
             Toast.shared.show("已保存")
-        case .pinned(let image):
+        case .pinned(let image, let frame):
             lastSelectionImage = image
             do {
-                _ = try pins.create(image: image, at: nil)
+                _ = try pins.create(image: image, at: frame)
                 Toast.shared.show("已贴图")
             } catch let error as PinStoreError {
                 if case .freeLimitReached = error { onFreeLimit?() }
