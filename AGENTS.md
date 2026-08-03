@@ -15,6 +15,7 @@
 - `import ScreenCaptureKit` 只能在 `Sources/PinSnap/Capture/`。
 - Free 贴图上限 **3**，无水印；门控走 `FeatureGate`。
 - v1.0 不做 OCR / 长截图 / 录屏 / AX 元素吸附。
+- v1.0 不做自定义权限引导窗、贴图分组、截图历史回放（未授权只深链系统设置）。
 - 用户可见文案走本地化；设置页保持短标签。
 
 ## 下一步（人）

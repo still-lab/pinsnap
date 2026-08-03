@@ -75,6 +75,7 @@ struct PinItem: Identifiable, Codable {
 struct PinSessionSnapshot: Codable {
     var version: Int            // = 1
     var pins: [PinItem]
+    // v1.0 不做分组；保留字段兼容时可为空数组
     var groups: [PinGroup]
     var activeGroupID: UUID?
 }
@@ -95,9 +96,9 @@ enum ClipboardContent {
 ```swift
 enum Feature: String, CaseIterable {
     case pinUnlimited
-    case pinGroups
+    // pinGroups — v1.0 不做
     case pinClickThrough
-    case historyReplay
+    // historyReplay — v1.0 不做
     case delayCapture
     case advancedAnnotate
     case filenameTemplate

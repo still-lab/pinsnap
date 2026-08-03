@@ -39,7 +39,7 @@
 Idle
   │ ⌃⇧A / 菜单
   ▼
-Preparing ──权限失败──► Onboarding（停留可重试）
+Preparing ──权限失败──► Idle（深链系统设置，无引导窗）
   │ OK
   ▼
 Capturing ──Esc──► Idle（丢弃）

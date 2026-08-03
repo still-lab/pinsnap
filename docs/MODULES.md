@@ -4,7 +4,7 @@
 
 | 目录 | 模块名 | 职责 |
 |---|---|---|
-| `Sources/PinSnap/App` | AppShell | `@main`、MenuBar、HotKeyCenter、Onboarding、SessionCoordinator |
+| `Sources/PinSnap/App` | AppShell | `@main`、MenuBar、HotKeyCenter、SessionCoordinator |
 | `Sources/PinSnap/Capture` | CaptureKit | ScreenGeometry、CaptureService、WindowTracker、ScreenshotFrame |
 | `Sources/PinSnap/Overlay` | OverlayUI | CaptureOverlayPanel、SelectionView、MagnifierView、CaptureToolbar |
 | `Sources/PinSnap/Annotate` | Annotator | AnnotationDocument、Shape、Renderer、UndoCommands |
@@ -35,7 +35,7 @@ Settings → Purchase, Support
 
 - `SessionCoordinator`：驱动截图状态机；组装出口。
 - `HotKeyCenter`：注册/冲突检测 ⌃⇧A/V/H。
-- `PermissionPrompter`：TCC 引导与深链。
+- `ScreenPermission`：TCC 状态检测与系统设置深链（无自定义引导窗）。
 
 ### Capture
 
