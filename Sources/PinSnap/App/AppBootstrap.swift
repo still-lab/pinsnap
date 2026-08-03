@@ -17,7 +17,6 @@ public final class AppBootstrap {
         gate: gate
     )
     public private(set) lazy var hotKeys = HotKeyCenter()
-    public var presentPermission: (() -> Void)?
     public var presentUpgrade: (() -> Void)?
     public var presentSettings: (() -> Void)?
 
@@ -35,7 +34,7 @@ public final class AppBootstrap {
     }
 
     public func start() {
-        coordinator.onNeedPermission = { [weak self] in self?.presentPermission?() }
+        ScreenPermission.noteLaunch()
         coordinator.onFreeLimit = { [weak self] in self?.presentUpgrade?() }
         hotKeys.onAction = { [weak self] action in
             guard let self, !self.hotKeysDisabled else { return }

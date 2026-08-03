@@ -35,6 +35,13 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO
+      configs:
+        Debug:
+          CODE_SIGN_ENTITLEMENTS: App/PinSnapDebug.entitlements
+          ENABLE_HARDENED_RUNTIME: NO
+        Release:
+          CODE_SIGN_ENTITLEMENTS: App/PinSnap.entitlements
+          ENABLE_HARDENED_RUNTIME: YES
     dependencies:
       - package: PinSnapKit
         product: PinSnapKit

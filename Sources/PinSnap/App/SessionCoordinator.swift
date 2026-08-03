@@ -13,8 +13,9 @@ public final class SessionCoordinator {
     private let clipboard = ClipboardBridge()
     private let overlay = CaptureOverlayController()
     private var lastSelectionImage: CGImage?
+    /// 本进程内只请求一次系统授权，避免每次点截图都弹 TCC。
+    private var didRequestScreenPermissionThisProcess = false
 
-    public var onNeedPermission: (() -> Void)?
     public var onFreeLimit: (() -> Void)?
 
     public init(
@@ -42,14 +43,7 @@ public final class SessionCoordinator {
     public func beginCaptureAsync(autoCopy: Bool = false) async {
         guard state == .idle || state == .preparing else { return }
         state = .preparing
-        if !ScreenPermission.isTrusted() {
-            _ = ScreenPermission.requestAccess()
-            if !ScreenPermission.isTrusted() {
-                state = .idle
-                onNeedPermission?()
-                return
-            }
-        }
+
         do {
             state = .capturing
             let frames = try await capture.captureStillFrames()
@@ -57,10 +51,13 @@ public final class SessionCoordinator {
             overlay.present(frames: frames)
         } catch CaptureError.permissionDenied {
             state = .idle
-            onNeedPermission?()
+            if !didRequestScreenPermissionThisProcess {
+                didRequestScreenPermissionThisProcess = true
+                _ = ScreenPermission.requestAccess()
+            }
+            PinSnapLog.capture.error("capture permissionDenied")
         } catch {
             state = .idle
-            Toast.shared.show(error.localizedDescription)
             PinSnapLog.capture.error("capture failed: \(error.localizedDescription)")
         }
     }

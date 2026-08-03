@@ -107,26 +107,3 @@ public struct UpgradeView: View {
         }
     }
 }
-
-public struct PermissionView: View {
-    public var onOpenSettings: () -> Void
-    public var onLater: () -> Void
-
-    public init(onOpenSettings: @escaping () -> Void, onLater: @escaping () -> Void) {
-        self.onOpenSettings = onOpenSettings
-        self.onLater = onLater
-    }
-
-    public var body: some View {
-        VStack(spacing: 16) {
-            Text("屏幕权限").font(.headline)
-            Text("系统设置 → 隐私与安全性 → 屏幕录制").font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button("打开系统设置", action: onOpenSettings).keyboardShortcut(.defaultAction)
-                Button("稍后", action: onLater)
-            }
-        }
-        .padding(24)
-        .frame(width: 360)
-    }
-}

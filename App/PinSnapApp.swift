@@ -7,7 +7,6 @@ import SwiftUI
 final class PinSnapApp: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
-    private var permissionWindow: NSWindow?
     private var upgradeWindow: NSWindow?
 
     static func main() {
@@ -20,11 +19,17 @@ final class PinSnapApp: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let boot = AppBootstrap.shared
-        boot.presentPermission = { [weak self] in self?.showPermission() }
         boot.presentUpgrade = { [weak self] in self?.showUpgrade() }
         boot.presentSettings = { [weak self] in self?.showSettings() }
         boot.start()
         setupStatusItem()
+
+        if CommandLine.arguments.contains("--self-test-capture") {
+            Task { @MainActor in
+                await ScreenPermission.writeCaptureSelfTestReport()
+                NSApp.terminate(nil)
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -143,21 +148,6 @@ final class PinSnapApp: NSObject, NSApplicationDelegate {
             settingsWindow = window
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    private func showPermission() {
-        let view = PermissionView(
-            onOpenSettings: { ScreenPermission.openSystemSettings() },
-            onLater: { [weak self] in self?.permissionWindow?.orderOut(nil) }
-        )
-        let hosting = NSHostingController(rootView: view)
-        let window = NSWindow(contentViewController: hosting)
-        window.title = "屏幕权限"
-        window.styleMask = [.titled, .closable]
-        permissionWindow = window
-        window.center()
-        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
