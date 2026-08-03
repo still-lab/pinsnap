@@ -113,12 +113,12 @@ public final class PinPanelController: NSObject, NSWindowDelegate {
         g.magnification = 0
     }
 
-    /// 滚轮缩放；⌃+滚轮调透明度（UI_SPEC §4.1）。
+    /// 滚轮缩放；空格+滚轮调透明度。
     private func handleScroll(_ event: NSEvent) {
         let delta = event.scrollingDeltaY
         guard abs(delta) > 0.01 else { return }
 
-        if event.modifierFlags.contains(.control) {
+        if Self.isSpaceKeyDown() {
             let next = min(1, max(0.15, currentAlpha + CGFloat(delta) * 0.008))
             currentAlpha = next
             panel.alphaValue = next
@@ -129,6 +129,11 @@ public final class PinPanelController: NSObject, NSWindowDelegate {
         let factor: CGFloat = delta > 0 ? 1.06 : (1 / 1.06)
         let mouseInWindow = panel.mouseLocationOutsideOfEventStream
         applyScale(currentScale * factor, anchorInWindow: mouseInWindow)
+    }
+
+    /// 空格不在 modifierFlags 里，用 HID 会话状态探测。
+    private static func isSpaceKeyDown() -> Bool {
+        CGEventSource.keyState(.combinedSessionState, key: 0x31) // kVK_Space
     }
 
     private func applyScale(_ raw: CGFloat, anchorInWindow: CGPoint?) {
@@ -213,7 +218,7 @@ public final class PinPanelController: NSObject, NSWindowDelegate {
     }
 }
 
-/// 可拖动；双击复制并销毁；滚轮缩放 / ⌃滚轮透明度。
+/// 可拖动；双击复制并销毁；滚轮缩放 / 空格+滚轮透明度。
 private final class PinContentView: NSImageView {
     var onDoubleClick: (() -> Void)?
     var onScroll: ((NSEvent) -> Void)?
