@@ -30,6 +30,9 @@ public final class SessionCoordinator {
         overlay.onFinish = { [weak self] outcome in
             self?.handleOverlay(outcome)
         }
+        overlay.onNeedUpgrade = { [weak self] in
+            self?.onFreeLimit?()
+        }
     }
 
     public func beginCapture(autoCopy: Bool = false) {

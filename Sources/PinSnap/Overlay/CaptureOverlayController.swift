@@ -15,6 +15,7 @@ public enum CaptureOverlayOutcome: Sendable {
 @MainActor
 public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     public var onFinish: ((CaptureOverlayOutcome) -> Void)?
+    public var onNeedUpgrade: (() -> Void)?
     public var annotationEnabled = true
     public var autoCopyOnSelect = false
 
@@ -24,6 +25,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private let windows = WindowTracker()
     private let exporter = ImageExporter()
     private let annotations = AnnotationController()
+    private let gate: FeatureGateProtocol = FeatureGate.shared
 
     private var selection: CaptureSelection?
     private var selectionLocked = false
@@ -51,6 +53,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private var textDragCheckpointed = false
     private let textFontSize: CGFloat = 18
     private let textColor = NSColor.systemRed
+
+    private var isOCRSelecting = false
+    private var ocrTask: Task<Void, Never>?
+    private weak var ocrHostView: OverlayView?
 
     public override init() {
         super.init()
@@ -92,6 +98,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     public func dismiss() {
+        exitOCRMode()
         closeTextEditor(commit: false)
         removeEscapeHatches()
         toolbar?.orderOut(nil)
@@ -118,6 +125,21 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                 if event.keyCode == 53 {
                     self.closeTextEditor(commit: false)
                     return nil
+                }
+                return event
+            }
+            if self.isOCRSelecting {
+                if event.keyCode == 53 {
+                    self.exitOCRMode()
+                    return nil
+                }
+                let cmd = event.modifierFlags.contains(.command)
+                // 显式复制选中 OCR 文本，避免落到「复制整图」或 TextView 富文本空拷
+                if cmd && event.keyCode == 8 {
+                    if self.copyOCRSelection() {
+                        return nil
+                    }
+                    return event
                 }
                 return event
             }
@@ -169,6 +191,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             closeTextEditor(commit: false)
             return
         }
+        if isOCRSelecting {
+            exitOCRMode()
+            return
+        }
         if selectionLocked, activeTool != nil {
             activeTool = nil
             toolbar?.setSelectedTool(nil)
@@ -182,6 +208,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     // MARK: - Mouse (from OverlayView)
 
     fileprivate func mouseDown(at global: CGPoint) {
+        if isOCRSelecting { return }
         if isEditingText {
             // 点在输入框外：提交当前文字
             finishTextInput(textHostView?.currentText() ?? "")
@@ -200,6 +227,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     fileprivate func mouseDragged(at global: CGPoint) {
+        if isOCRSelecting { return }
         if selectionLocked {
             handleAnnotateMouseDragged(at: global)
             return
@@ -211,6 +239,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     fileprivate func mouseUp(at global: CGPoint) {
+        if isOCRSelecting { return }
         if selectionLocked {
             handleAnnotateMouseUp(at: global)
             return
@@ -246,6 +275,14 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     fileprivate func updateCursor(at global: CGPoint) {
+        if isOCRSelecting {
+            if let sel = selection, sel.logicalRect.contains(global) {
+                NSCursor.iBeam.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+            return
+        }
         if draggingTextID != nil {
             NSCursor.closedHand.set()
             return
@@ -546,6 +583,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     func toolbarSelectTool(_ tool: CaptureAnnotateTool?) {
+        exitOCRMode()
         closeTextEditor(commit: false)
         activeTool = tool
         if let sel = selection {
@@ -561,16 +599,116 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     func toolbarUndo() {
+        exitOCRMode()
         closeTextEditor(commit: false)
         annotations.undo()
         draftShape = nil
         syncLayers()
     }
 
-    func toolbarCopy() { commitCopy() }
+    func toolbarOCR() { beginOCR() }
+    func toolbarCopy() {
+        if isOCRSelecting, copyOCRSelection() { return }
+        commitCopy()
+    }
     func toolbarSave() { commitSave() }
     func toolbarPin() { commitPin() }
     func toolbarClose() { cancel() }
+
+    // MARK: - OCR
+
+    private func beginOCR() {
+        guard selectionLocked, let sel = selection else {
+            PinSnapLog.app.error("OCR: selection not locked")
+            return
+        }
+        if !gate.isEnabled(.ocr) {
+            #if DEBUG
+            FeatureGate.shared.debugForcePro = true
+            #else
+            onNeedUpgrade?()
+            return
+            #endif
+        }
+        closeTextEditor(commit: false)
+        activeTool = nil
+        toolbar?.setSelectedTool(nil)
+        draftShape = nil
+        syncLayers()
+        // 清旧层但不 cancel 即将启动的 task
+        ocrHostView?.removeOCR()
+        ocrHostView = nil
+        isOCRSelecting = false
+
+        guard let image = exportImage(),
+              let frame = frames.first(where: { $0.screenID == sel.screenID })
+        else {
+            PinSnapLog.app.error("OCR: exportImage failed")
+            return
+        }
+
+        let scale = frame.scale
+        PinSnapLog.app.info("OCR: start \(image.width)x\(image.height) scale=\(scale)")
+        ocrTask?.cancel()
+        ocrTask = Task { [weak self] in
+            do {
+                let result = try await OCRService.recognizeLines(in: image)
+                guard let self, !Task.isCancelled else { return }
+                await MainActor.run {
+                    self.finishOCR(result, image: image, scale: scale)
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                PinSnapLog.app.error("OCR failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func finishOCR(_ result: OCRResult, image: CGImage, scale: CGFloat) {
+        guard let sel = selection else { return }
+        ocrHostView?.removeOCR()
+        ocrHostView = nil
+        guard !result.isEmpty else {
+            PinSnapLog.app.info("OCR: no text recognized")
+            return
+        }
+        PinSnapLog.app.info("OCR: \(result.lines.count) lines")
+        for panel in panels {
+            guard let view = panel.contentView as? OverlayView,
+                  view.screenFrame?.screenID == sel.screenID
+            else { continue }
+            view.installOCR(
+                lines: result.lines,
+                selectionGlobal: sel.logicalRect,
+                imagePixelSize: CGSize(width: image.width, height: image.height),
+                scale: scale
+            )
+            ocrHostView = view
+            panel.makeKeyAndOrderFront(nil)
+            break
+        }
+        isOCRSelecting = true
+        updateCursor(at: CGPoint(x: sel.logicalRect.midX, y: sel.logicalRect.midY))
+    }
+
+    private func exitOCRMode() {
+        ocrTask?.cancel()
+        ocrTask = nil
+        ocrHostView?.removeOCR()
+        ocrHostView = nil
+        isOCRSelecting = false
+    }
+
+    @discardableResult
+    private func copyOCRSelection() -> Bool {
+        let ok = ocrHostView?.copyOCRSelection() ?? false
+        if ok {
+            PinSnapLog.app.info("OCR: copied selection")
+        } else {
+            PinSnapLog.app.info("OCR: nothing selected to copy")
+        }
+        return ok
+    }
 
     // MARK: - Commit
 
@@ -663,6 +801,17 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     fileprivate func keyDown(_ event: NSEvent) {
+        if isOCRSelecting {
+            if event.keyCode == 53 {
+                exitOCRMode()
+                return
+            }
+            if event.keyCode == 8, event.modifierFlags.contains(.command) {
+                _ = copyOCRSelection()
+                return
+            }
+            return
+        }
         switch event.keyCode {
         case 53: // Esc — 由 monitor 的 handleEscape 处理；保留兼容
             handleEscape()
@@ -701,11 +850,37 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
     private var textField: NSTextField?
     private var onTextCommit: ((String) -> Void)?
     private var onTextCancel: (() -> Void)?
+    private var ocrOverlay: OCRTextOverlayView?
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { false }
 
     func currentText() -> String { textField?.stringValue ?? "" }
+
+    func installOCR(
+        lines: [OCRLine],
+        selectionGlobal: CGRect,
+        imagePixelSize: CGSize,
+        scale: CGFloat
+    ) {
+        removeOCR()
+        let frame = convertFromGlobal(selectionGlobal)
+        let overlay = OCRTextOverlayView(frame: frame)
+        overlay.apply(lines: lines, imagePixelSize: imagePixelSize, scale: scale)
+        addSubview(overlay)
+        ocrOverlay = overlay
+    }
+
+    func removeOCR() {
+        ocrOverlay?.teardown()
+        ocrOverlay?.removeFromSuperview()
+        ocrOverlay = nil
+    }
+
+    @discardableResult
+    func copyOCRSelection() -> Bool {
+        ocrOverlay?.copySelectionToPasteboard() ?? false
+    }
 
     /// 当前编辑文字在选区内的绘制原点（与 CALayer/`makeTextCGImage` 顶对齐一致）。
     func textDrawOriginInSelectionLocal(
@@ -1143,8 +1318,9 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
     }
 
     override func keyDown(with event: NSEvent) {
-        // 输入文字时交给系统，不走截图快捷键
+        // 文字输入 / OCR 选区：快捷键由 monitor 或显式 copy 处理
         if textField != nil { return }
+        if ocrOverlay != nil { return }
         controller?.keyDown(event)
     }
 }

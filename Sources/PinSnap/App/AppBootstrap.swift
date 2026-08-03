@@ -48,6 +48,10 @@ public final class AppBootstrap {
         applyHotKeyRegistration()
         coordinator.restorePins()
         Task { await StoreClient.shared.refreshEntitlements() }
+        #if DEBUG
+        // 本地联调：默认解锁 Pro，便于测 OCR 等门控能力
+        FeatureGate.shared.debugForcePro = true
+        #endif
         PinSnapLog.app.info("PinSnap started (hotKeysDisabled=\(self.hotKeysDisabled))")
     }
 

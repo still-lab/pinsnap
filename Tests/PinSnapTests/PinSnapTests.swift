@@ -66,6 +66,22 @@ final class FeatureGateTests: XCTestCase {
     }
 }
 
+final class OCRGeometryTests: XCTestCase {
+    func testVisionNormalizedRectMapsToLogicalPoints() {
+        // Vision box 左下原点；整图像素 200×100，scale=2 → 逻辑选区 100×50
+        let normalized = CGRect(x: 0.1, y: 0.2, width: 0.5, height: 0.4)
+        let logical = OCRGeometry.logicalRect(
+            normalized: normalized,
+            imagePixelSize: CGSize(width: 200, height: 100),
+            scale: 2
+        )
+        XCTAssertEqual(logical.minX, 10, accuracy: 0.01)
+        XCTAssertEqual(logical.minY, 10, accuracy: 0.01)
+        XCTAssertEqual(logical.width, 50, accuracy: 0.01)
+        XCTAssertEqual(logical.height, 20, accuracy: 0.01)
+    }
+}
+
 final class AnnotationUndoTests: XCTestCase {
     @MainActor
     func testUndoRedo() {

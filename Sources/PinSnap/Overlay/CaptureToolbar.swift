@@ -29,6 +29,7 @@ protocol CaptureToolbarDelegate: AnyObject {
     func toolbarSelectTool(_ tool: CaptureAnnotateTool?)
     func toolbarSelectShapeStyle(_ style: CaptureShapeStyle)
     func toolbarUndo()
+    func toolbarOCR()
     func toolbarCopy()
     func toolbarSave()
     func toolbarPin()
@@ -55,11 +56,11 @@ final class CaptureToolbar: NSPanel {
     private var rectButton: NSButton!
     private var ellipseButton: NSButton!
 
-    private let barWidth: CGFloat = 420
+    private let barWidth: CGFloat = 460
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: rowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: rowHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -112,6 +113,7 @@ final class CaptureToolbar: NSPanel {
         row1.addArrangedSubview(sep())
         row1.addArrangedSubview(actionBtn("arrow.uturn.backward", tip: "撤销", #selector(undoAction)))
         row1.addArrangedSubview(sep())
+        row1.addArrangedSubview(actionBtn("doc.text.magnifyingglass", tip: "OCR", #selector(ocrAction)))
         row1.addArrangedSubview(actionBtn("doc.on.doc", tip: "复制", #selector(copyAction)))
         row1.addArrangedSubview(actionBtn("square.and.arrow.down", tip: "保存", #selector(saveAction)))
         row1.addArrangedSubview(actionBtn("pin", tip: "贴图", #selector(pinAction)))
@@ -290,6 +292,7 @@ final class CaptureToolbar: NSPanel {
     }
 
     @objc private func undoAction() { actionHandler?.toolbarUndo() }
+    @objc private func ocrAction() { actionHandler?.toolbarOCR() }
     @objc private func copyAction() { actionHandler?.toolbarCopy() }
     @objc private func saveAction() { actionHandler?.toolbarSave() }
     @objc private func pinAction() { actionHandler?.toolbarPin() }
