@@ -470,7 +470,12 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
 
     private func finishTextInput(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let point = pendingTextLocal
+        // 成稿锚点：按「编辑顶边 = 成稿顶边」反推字框原点（消除 firstRect 与 textSize 行高差）
+        let point = textHostView?.textDrawOriginInSelectionLocal(
+            selectionGlobal: selection?.logicalRect ?? .zero,
+            text: trimmed,
+            fontSize: textFontSize
+        ) ?? pendingTextLocal
         let editID = editingShapeID
         closeTextEditor(commit: false)
         guard let point else {
@@ -702,6 +707,52 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
 
     func currentText() -> String { textField?.stringValue ?? "" }
 
+    /// 当前编辑文字在选区内的绘制原点（与 CALayer/`makeTextCGImage` 顶对齐一致）。
+    func textDrawOriginInSelectionLocal(
+        selectionGlobal: CGRect,
+        text: String,
+        fontSize: CGFloat
+    ) -> CGPoint? {
+        guard let origin = textDrawOriginInView(text: text, fontSize: fontSize),
+              selectionGlobal != .zero
+        else { return nil }
+        let sel = convertFromGlobal(selectionGlobal)
+        return CGPoint(x: origin.x - sel.minX, y: origin.y - sel.minY)
+    }
+
+    /// 编辑器可见文字 → 成稿字框左下角（view 坐标）。
+    /// 用字形包围盒顶边（非 firstRect 行框）对齐成稿 `draw(in:)` 顶边；Y 向下像素对齐消除上偏。
+    private func textDrawOriginInView(text: String, fontSize: CGFloat) -> CGPoint? {
+        guard let editor = textField?.currentEditor() as? NSTextView,
+              let window,
+              let layout = editor.layoutManager,
+              let container = editor.textContainer
+        else { return nil }
+        let length = (text as NSString).length
+        guard length > 0 else { return nil }
+
+        let charRange = NSRange(location: 0, length: length)
+        let glyphRange = layout.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+        let inView: CGRect
+        if glyphRange.length > 0 {
+            var glyphBounds = layout.boundingRect(forGlyphRange: glyphRange, in: container)
+            let containerOrigin = editor.textContainerOrigin
+            glyphBounds = glyphBounds.offsetBy(dx: containerOrigin.x, dy: containerOrigin.y)
+            inView = convert(editor.convert(glyphBounds, to: nil), from: nil)
+        } else {
+            let screen = editor.firstRect(forCharacterRange: charRange, actualRange: nil)
+            guard screen.height > 0 else { return nil }
+            inView = convert(window.convertFromScreen(screen), from: nil)
+        }
+
+        let drawSize = AnnotationController.textSize(text: text, fontSize: fontSize)
+        let scale = window.backingScaleFactor
+        // 顶对齐：origin.y = top - height；floor 避免 CALayer 亚像素上取整造成的微上偏
+        let y = floor((inView.maxY - drawSize.height) * scale) / scale
+        let x = (inView.minX * scale).rounded() / scale
+        return CGPoint(x: x, y: y)
+    }
+
     func beginTextInput(
         selectionLocal: CGPoint,
         selectionGlobal: CGRect,
@@ -758,37 +809,50 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
             editor.alphaValue = 0
             let caretIndex = initial.count
             editor.selectedRange = NSRange(location: caretIndex, length: 0)
-            // 对齐插入条几何中心（midY），不是 caret.origin（底边）
-            self.alignTextField(field, editor: editor, caretIndex: caretIndex, to: origin)
+            // 新输入：点击对齐插入条中心；再编辑：selectionLocal 已是字框左下角
+            let anchor: TextAlignAnchor = initial.isEmpty ? .caretCenter : .drawOrigin
+            self.alignTextField(field, editor: editor, caretIndex: caretIndex, to: origin, anchor: anchor)
             self.reseatFieldEditor(field, editor: editor, caretIndex: caretIndex, color: color)
             editor.alphaValue = 0
-            // select 可能微移 titleRect，再补一次
-            self.alignTextField(field, editor: editor, caretIndex: caretIndex, to: origin)
+            self.alignTextField(field, editor: editor, caretIndex: caretIndex, to: origin, anchor: anchor)
             self.reseatFieldEditor(field, editor: editor, caretIndex: caretIndex, color: color)
             editor.alphaValue = 1
             field.alphaValue = 1
         }
     }
 
-    /// 将 field editor 插入点锚点 `(minX, midY)` 平移到目标点击点。
+    private enum TextAlignAnchor {
+        case caretCenter // (minX, midY) — 新输入点击
+        case drawOrigin  // (minX, minY) — 与成稿字框左下角一致
+    }
+
+    /// 将 field editor 指定锚点平移到目标点。
     private func alignTextField(
         _ field: NSTextField,
         editor: NSTextView,
         caretIndex: Int,
-        to target: CGPoint
+        to target: CGPoint,
+        anchor: TextAlignAnchor
     ) {
         guard let window else { return }
-        let caretScreen = editor.firstRect(
-            forCharacterRange: NSRange(location: caretIndex, length: 0),
-            actualRange: nil
-        )
-        guard caretScreen.height > 0 else { return }
-        let caretWindow = window.convertFromScreen(caretScreen)
-        // X：落字左缘；Y：插入条几何中心（居中对齐）
-        let anchorInView = convert(
-            CGPoint(x: caretWindow.minX, y: caretWindow.midY),
-            from: nil
-        )
+        let anchorInView: CGPoint
+        switch anchor {
+        case .caretCenter:
+            let caretScreen = editor.firstRect(
+                forCharacterRange: NSRange(location: caretIndex, length: 0),
+                actualRange: nil
+            )
+            guard caretScreen.height > 0 else { return }
+            let caretWindow = window.convertFromScreen(caretScreen)
+            anchorInView = convert(
+                CGPoint(x: caretWindow.minX, y: caretWindow.midY),
+                from: nil
+            )
+        case .drawOrigin:
+            let fontSize = field.font?.pointSize ?? 18
+            guard let origin = textDrawOriginInView(text: field.stringValue, fontSize: fontSize) else { return }
+            anchorInView = origin
+        }
         let dx = target.x - anchorInView.x
         let dy = target.y - anchorInView.y
         guard abs(dx) > 0.5 || abs(dy) > 0.5 else { return }
