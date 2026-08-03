@@ -61,6 +61,8 @@ final class CaptureToolbar: NSPanel {
     private let barWidth: CGFloat = 450
     private let subRowExtra: CGFloat = 34
     private let dividerHeight: CGFloat = 1
+    /// 工具条与选区之间的间距
+    private let selectionGap: CGFloat = 12
 
     private var selectedTool: CaptureAnnotateTool?
     private var shapeStyle: CaptureShapeStyle = .rect
@@ -231,9 +233,9 @@ final class CaptureToolbar: NSPanel {
         let h = height
         let w = barWidth
         var x = selection.midX - w / 2
-        var y = selection.minY - h - 2
+        var y = selection.minY - h - selectionGap
         if y < screen.minY + 2 {
-            y = min(selection.maxY + 2, screen.maxY - h - 2)
+            y = min(selection.maxY + selectionGap, screen.maxY - h - 2)
         }
         x = min(max(x, screen.minX + 2), screen.maxX - w - 2)
         setFrame(NSRect(x: x, y: y, width: w, height: h), display: false)

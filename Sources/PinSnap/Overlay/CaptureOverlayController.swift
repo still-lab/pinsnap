@@ -861,7 +861,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         } else {
             toolbar.setFrameOrigin(NSPoint(
                 x: selection.logicalRect.midX - toolbar.width / 2,
-                y: selection.logicalRect.minY - toolbar.height - 2
+                y: selection.logicalRect.minY - toolbar.height - 12
             ))
         }
     }
