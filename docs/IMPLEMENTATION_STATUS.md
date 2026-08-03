@@ -10,7 +10,7 @@
 | C M0 | 完成 | Xcode App、LSUIElement、菜单栏、热键、屏幕权限深链（无引导窗）、设置壳 |
 | D M1 | 完成 | ScreenGeometry、SCK/CG 截帧、窗口吸附、Overlay、复制/保存 |
 | E M2 | 完成 | 标注含直线/模糊/撤销重做；Pin 滚轮缩放+空格滚轮透明度；截→贴 / 剪贴板贴图 / Free≤3 |
-| F M3 | 进行中 | 关闭/销毁/显隐、穿透、会话、StoreKit 客户端；**不做**分组/历史；延时等 P1 待补 |
+| F M3 | 进行中 | 关闭/销毁/显隐、StoreKit 客户端；**不做**分组/历史/会话恢复/捕捉光标；**暂缓**穿透；延时等 P1 待补 |
 | G M4 | 未就绪 | 本地化/Connect/TestFlight 需账号侧 Ext |
 | H 运营 | 流程文档 | CONNECT_SETUP / STORE_CHECKLIST 可跟踪 |
 | I v1.1 | 代码落地 | `OCRService`（Vision 文本+条码） |

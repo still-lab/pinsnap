@@ -106,10 +106,6 @@ public final class SessionCoordinator {
         pins.toggleVisibility()
     }
 
-    public func restorePins() {
-        Task { try? await pins.restoreSession() }
-    }
-
     private func handleOverlay(_ outcome: CaptureOverlayOutcome) {
         state = .committing
         switch outcome {

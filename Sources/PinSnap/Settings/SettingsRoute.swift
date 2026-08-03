@@ -19,7 +19,6 @@ public struct SettingsRootView: View {
     @State private var route: SettingsRoute = .general
     @State private var launchAtLogin = false
     @State private var cancelOnActivate = false
-    @State private var captureCursor = false
     @AppStorage("pinsnap.filenameTemplate") private var template = FilenameTemplate.default.pattern
 
     public init() {}
@@ -36,7 +35,6 @@ public struct SettingsRootView: View {
                     Form {
                         Toggle("开机启动", isOn: $launchAtLogin)
                         Toggle("外部激活取消截图", isOn: $cancelOnActivate)
-                        Toggle("捕捉光标", isOn: $captureCursor)
                     }
                 case .hotkeys:
                     Form {
@@ -74,7 +72,7 @@ public struct UpgradeView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("PinSnap Pro").font(.title2.bold())
-            Text("· 无限贴图\n· 穿透 / 会话恢复\n· OCR 与进阶能力").font(.body)
+            Text("· 无限贴图\n· OCR 与进阶能力").font(.body)
             HStack {
                 Button("¥8/月") { Task { await buy(StoreProductID.monthly) } }
                 Button("¥48/年") { Task { await buy(StoreProductID.yearly) } }

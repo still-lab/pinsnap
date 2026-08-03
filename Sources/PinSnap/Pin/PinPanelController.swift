@@ -67,8 +67,6 @@ public final class PinPanelController: NSObject, NSWindowDelegate {
         menu.addItem(withTitle: "复制", action: #selector(copyImage), keyEquivalent: "")
         menu.addItem(withTitle: "保存…", action: #selector(saveImage), keyEquivalent: "")
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(withTitle: "穿透", action: #selector(toggleClickThrough), keyEquivalent: "")
-        menu.addItem(NSMenuItem.separator())
         let opacity = NSMenuItem(title: "透明度", action: nil, keyEquivalent: "")
         let opacityMenu = NSMenu()
         for (title, value) in [("100%", 1.0), ("75%", 0.75), ("50%", 0.5), ("25%", 0.25)] as [(String, CGFloat)] {
@@ -186,12 +184,6 @@ public final class PinPanelController: NSObject, NSWindowDelegate {
         if p.runModal() == .OK, let url = p.url {
             try? ImageExporter().save(img, to: url, format: .png)
         }
-    }
-
-    @objc private func toggleClickThrough() {
-        let next = !panel.ignoresMouseEvents
-        try? store?.setClickThrough(id: item.id, enabled: next)
-        Toast.shared.show(next ? "穿透已开" : "穿透已关")
     }
 
     @objc private func setOpacityFromMenu(_ sender: NSMenuItem) {

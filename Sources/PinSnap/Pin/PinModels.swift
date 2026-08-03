@@ -142,7 +142,6 @@ public final class PinStore: PinStoreProtocol {
         let panel = PinPanelController(item: item, imageURL: url, store: self)
         panels[id] = panel
         panel.show()
-        Task { try? await persistSession() }
         return item
     }
 
@@ -170,7 +169,6 @@ public final class PinStore: PinStoreProtocol {
         panels[id] = nil
         closedStack.append(item)
         if closedStack.count > 5 { closedStack.removeFirst() }
-        Task { try? await persistSession() }
     }
 
     public func destroy(id: UUID) throws {
@@ -180,7 +178,6 @@ public final class PinStore: PinStoreProtocol {
         panels[id] = nil
         let url = sessionDir.appendingPathComponent(id.uuidString + ".png")
         try? FileManager.default.removeItem(at: url)
-        Task { try? await persistSession() }
     }
 
     public func hideAll() {
@@ -220,30 +217,11 @@ public final class PinStore: PinStoreProtocol {
         _ = try? create(image: img, at: item.frame)
     }
 
-    public func restoreSession() async throws {
-        let meta = sessionDir.appendingPathComponent("meta.json")
-        guard let data = try? Data(contentsOf: meta),
-              let snap = try? JSONDecoder().decode(PinSessionSnapshot.self, from: data)
-        else { return }
-        for item in snap.pins {
-            let url = sessionDir.appendingPathComponent(item.imageFileName)
-            guard let imgData = try? Data(contentsOf: url),
-                  NSImage(data: imgData)?.cgImage(forProposedRect: nil, context: nil, hints: nil) != nil
-            else { continue }
-            if !gate.isEnabled(.pinUnlimited), pins.count >= freeLimit { break }
-            let copy = item
-            pins.append(copy)
-            let panel = PinPanelController(item: copy, imageURL: url, store: self)
-            panels[copy.id] = panel
-            panel.show()
-        }
-    }
+    /// v1.0 不做会话恢复：启动不读盘。
+    public func restoreSession() async throws {}
 
-    public func persistSession() async throws {
-        let snap = PinSessionSnapshot(pins: pins, groups: [])
-        let data = try JSONEncoder().encode(snap)
-        try AtomicFile.write(data, to: sessionDir.appendingPathComponent("meta.json"))
-    }
+    /// v1.0 不做会话持久化：不写 meta.json（贴图 PNG 仅服务当前进程展示）。
+    public func persistSession() async throws {}
 
     func panelDidClose(id: UUID) {
         try? close(id: id)

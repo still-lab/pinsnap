@@ -33,8 +33,8 @@ public final class FeatureGate: FeatureGateProtocol {
     private init() {}
 
     public func isEnabled(_ feature: Feature) -> Bool {
-        if debugForcePro || isPro { return true }
-        return false
+        // 现阶段全免费；付费门控后期再梳
+        true
     }
 
     public func applyEntitlement(isPro: Bool) {

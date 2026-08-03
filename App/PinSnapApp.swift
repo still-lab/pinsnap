@@ -63,7 +63,6 @@ final class PinSnapApp: NSObject, NSApplicationDelegate {
         menu.addItem(actionItem("截图并自动复制", #selector(captureAutoCopy)))
         menu.addItem(actionItem("从剪切板贴图", #selector(paste)))
         menu.addItem(actionItem("隐藏/显示所有贴图", #selector(togglePins)))
-        menu.addItem(actionItem("取消全部穿透", #selector(clearClickThrough)))
         menu.addItem(actionItem("清空截屏历史", #selector(clearHistory)))
         menu.addItem(.separator())
 
@@ -114,10 +113,6 @@ final class PinSnapApp: NSObject, NSApplicationDelegate {
 
     @objc private func togglePins() {
         AppBootstrap.shared.coordinator.togglePinVisibility()
-    }
-
-    @objc private func clearClickThrough() {
-        AppBootstrap.shared.pins.clearAllClickThrough()
     }
 
     @objc private func clearHistory() {

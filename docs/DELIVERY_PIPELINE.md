@@ -75,7 +75,7 @@
 | M0 | Xcode macOS App、沙盒、菜单栏、真热键、权限深链 |
 | M1 | ScreenCaptureKit 截帧、Overlay 交互、多屏几何 |
 | M2 | 标注绘制、Pin NSPanel、剪贴板图、升级拦截 UI |
-| M3 | 穿透/会话/文色贴图/StoreKit 沙盒（无分组、无历史） |
+| M3 | 文色贴图/StoreKit 沙盒（无分组、无历史、无会话恢复、穿透暂缓） |
 | M4 | 本地化、性能、提审 |
 
 **外部依赖（人/账号）**

@@ -58,7 +58,7 @@ Idle
 
 - 每张贴图一个 `NSPanel`（`.nonactivatingPanel`，floating）。
 - `PinStore` 为唯一真相源；Panel 是视图投影。
-- 定期 / 退出时原子写入 `Application Support/PinSnap/session/`。
+- Pin 仅存活于当前进程；**不做**退出/崩溃后会话恢复。
 
 ## 坐标策略（v1.0）
 

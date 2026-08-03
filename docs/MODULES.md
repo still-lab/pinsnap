@@ -54,7 +54,7 @@ Settings → Purchase, Support
 
 ### Pin
 
-- `PinStore`：`create` / `close` / `destroy` / `hideAll` / `restoreSession`。
+- `PinStore`：`create` / `close` / `destroy` / `hideAll`（v1.0 不做 `restoreSession`）。
 - `ClipboardBridge.resolve() -> ClipboardContent`。
 - Free：`create` 前查 `FeatureGate`。
 

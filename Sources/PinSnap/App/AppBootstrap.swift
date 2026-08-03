@@ -45,7 +45,6 @@ public final class AppBootstrap {
             }
         }
         applyHotKeyRegistration()
-        coordinator.restorePins()
         Task { await StoreClient.shared.refreshEntitlements() }
         // DEBUG 默认 Free，便于验 ≤3；升级页购买失败时可调试解锁
         PinSnapLog.app.info("PinSnap started (hotKeysDisabled=\(self.hotKeysDisabled))")

@@ -292,27 +292,27 @@
 - [ ] F-007 右键菜单：关闭/销毁/穿透/复制/保存/标注
 - [ ] F-008 按 PIN_LIFECYCLE 表 1–9 手工打勾
 
-## F2 穿透（不做分组）
+## F2 穿透（暂缓 · 日后 Pro）
 
-- [ ] F-020 `ignoresMouseEvents` 切换
-- [ ] F-021 穿透 HUD Toast
-- [ ] F-022 菜单「取消全部穿透」
-- [ ] F-023 Free 点穿透 → 升级
-- [ ] F-024 FeatureGate.pinClickThrough
+- [x] F-020 **砍掉（暂缓）**：`ignoresMouseEvents` 入口
+- [x] F-021 **砍掉（暂缓）**：穿透 HUD Toast
+- [x] F-022 **砍掉（暂缓）**：菜单「取消全部穿透」
+- [x] F-023 **砍掉（暂缓）**：Free 点穿透 → 升级
+- [x] F-024 FeatureGate.pinClickThrough（枚举保留，UI 暂不接）
 - [x] F-025 **砍掉**：PinGroup CRUD
 - [x] F-026 **砍掉**：切换活动组
 - [x] F-027 **砍掉**：组管理 UI
 - [x] F-028 **砍掉**：FeatureGate.pinGroups
 
-## F3 会话持久化
+## F3 会话持久化（不做）
 
-- [ ] F-030 meta.json + png 布局
-- [ ] F-031 AtomicFile 写入
-- [ ] F-032 启动 restoreSession
-- [ ] F-033 定时 autosave
-- [ ] F-034 退出前 persist
-- [ ] F-035 损坏 meta 恢复策略（清空或备份）
-- [ ] F-036 Free 是否持久化：决议并实现（建议 Free 也持久但张数限制）
+- [x] F-030 **砍掉**：meta.json + png 布局（会话恢复）
+- [x] F-031 **砍掉**：AtomicFile 会话写入
+- [x] F-032 **砍掉**：启动 restoreSession
+- [x] F-033 **砍掉**：定时 autosave
+- [x] F-034 **砍掉**：退出前 persist
+- [x] F-035 **砍掉**：损坏 meta 恢复策略
+- [x] F-036 **砍掉**：Free 是否持久化
 
 ## F4 剪贴板增强
 
@@ -338,7 +338,7 @@
 - [ ] F-064 设置切换色值格式
 - [ ] F-065 重复上次区域热键
 - [ ] F-066 延时截图 1–10s UI
-- [ ] F-067 捕捉光标 Toggle + 实现
+- [x] F-067 **砍掉**：捕捉光标 Toggle + 实现
 - [x] F-068 **砍掉**：历史回放 UI
 - [ ] F-069 快捷保存目录 ⌘⇧S
 - [ ] F-070 自动保存选项

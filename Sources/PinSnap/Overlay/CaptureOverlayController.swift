@@ -59,6 +59,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private var isOCRSelecting = false
     private var ocrTask: Task<Void, Never>?
     private weak var ocrHostView: OverlayView?
+    private var codeResultBar: OCRCodeResultBar?
 
     public override init() {
         super.init()
@@ -144,6 +145,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                         return nil
                     }
                     return event
+                }
+                if cmd && event.keyCode == 0 {
+                    self.selectAllOCR()
+                    return nil
                 }
                 return event
             }
@@ -651,20 +656,12 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             PinSnapLog.app.error("OCR: selection not locked")
             return
         }
-        if !gate.isEnabled(.ocr) {
-            #if DEBUG
-            FeatureGate.shared.debugForcePro = true
-            #else
-            onNeedUpgrade?()
-            return
-            #endif
-        }
         closeTextEditor(commit: false)
         activeTool = nil
         toolbar?.setSelectedTool(nil)
         draftShape = nil
         syncLayers()
-        // 清旧层但不 cancel 即将启动的 task
+        dismissCodeResultBar()
         ocrHostView?.removeOCR()
         ocrHostView = nil
         isOCRSelecting = false
@@ -681,6 +678,15 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         ocrTask?.cancel()
         ocrTask = Task { [weak self] in
             do {
+                // 有码优先
+                let codes = try await OCRService.recognizeBarcodes(in: image)
+                if let payload = codes.first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+                    guard let self, !Task.isCancelled else { return }
+                    await MainActor.run {
+                        self.finishBarcode(payload)
+                    }
+                    return
+                }
                 let result = try await OCRService.recognizeLines(in: image)
                 guard let self, !Task.isCancelled else { return }
                 await MainActor.run {
@@ -691,6 +697,18 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                 PinSnapLog.app.error("OCR failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    private func finishBarcode(_ payload: String) {
+        guard let sel = selection else { return }
+        dismissCodeResultBar()
+        isOCRSelecting = true
+        let bar = OCRCodeResultBar(payload: payload, under: sel.logicalRect) { [weak self] in
+            self?.exitOCRMode()
+        }
+        codeResultBar = bar
+        bar.present()
+        PinSnapLog.app.info("OCR: barcode payload len=\(payload.count)")
     }
 
     private func finishOCR(_ result: OCRResult, image: CGImage, scale: CGFloat) {
@@ -714,6 +732,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             )
             ocrHostView = view
             panel.makeKeyAndOrderFront(nil)
+            view.window?.makeFirstResponder(view.ocrOverlayForFocus)
             break
         }
         isOCRSelecting = true
@@ -723,9 +742,15 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private func exitOCRMode() {
         ocrTask?.cancel()
         ocrTask = nil
+        dismissCodeResultBar()
         ocrHostView?.removeOCR()
         ocrHostView = nil
         isOCRSelecting = false
+    }
+
+    private func dismissCodeResultBar() {
+        codeResultBar?.orderOut(nil)
+        codeResultBar = nil
     }
 
     @discardableResult
@@ -737,6 +762,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             PinSnapLog.app.info("OCR: nothing selected to copy")
         }
         return ok
+    }
+
+    private func selectAllOCR() {
+        ocrHostView?.selectAllOCR()
     }
 
     // MARK: - Commit
@@ -889,9 +918,17 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                 exitOCRMode()
                 return
             }
-            if event.keyCode == 8, event.modifierFlags.contains(.command) {
-                _ = copyOCRSelection()
-                return
+            if event.modifierFlags.contains(.command) {
+                switch event.keyCode {
+                case 8: // C
+                    _ = copyOCRSelection()
+                    return
+                case 0: // A
+                    selectAllOCR()
+                    return
+                default:
+                    break
+                }
             }
             return
         }
@@ -969,6 +1006,13 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
     func copyOCRSelection() -> Bool {
         ocrOverlay?.copySelectionToPasteboard() ?? false
     }
+
+    func selectAllOCR() {
+        ocrOverlay?.selectAll()
+    }
+
+    /// 供外部把焦点交给 OCR 叠层（⌘A / 双击选词等）。
+    var ocrOverlayForFocus: NSView? { ocrOverlay }
 
     /// 当前编辑文字在选区内的绘制原点（与 CALayer/`makeTextCGImage` 顶对齐一致）。
     func textDrawOriginInSelectionLocal(

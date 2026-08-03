@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-/// OCR 叠层：浅底标出识别区；自定义拖选支持跨行；复制写纯文本。
+/// OCR 叠层：浅底标出识别区；点选整行 / 双击选词 / 拖选跨行 / ⌘A 全选；复制仅纯文本。
 @MainActor
 final class OCRTextOverlayView: NSView {
     private struct LineBox {
@@ -11,7 +11,6 @@ final class OCRTextOverlayView: NSView {
         var band: NSView
     }
 
-    /// 阅读顺序（自上而下）下的选区端点。
     private struct Caret: Comparable {
         var line: Int
         var offset: Int
@@ -26,11 +25,12 @@ final class OCRTextOverlayView: NSView {
     private var anchor: Caret?
     private var focus: Caret?
     private var selectionLayer = CAShapeLayer()
+    private var mouseDownPoint: CGPoint?
+    private var didDrag = false
 
-    /// 识别区底色（低透明，不抢底图文字）
     private let bandColor = NSColor.systemTeal.withAlphaComponent(0.16)
-    /// 拖选高亮（低透明，不遮字）
     private let selectionFill = NSColor.systemBlue.withAlphaComponent(0.20)
+    private let clickSlop: CGFloat = 4
 
     override var isFlipped: Bool { false }
     override var acceptsFirstResponder: Bool { true }
@@ -66,14 +66,12 @@ final class OCRTextOverlayView: NSView {
             band.wantsLayer = true
             band.layer?.backgroundColor = bandColor.cgColor
             band.layer?.cornerRadius = 2
-            // 命中交给父视图做跨行拖选
             band.layer?.masksToBounds = true
             addSubview(band)
 
             built.append(LineBox(text: line.text, frame: frame, font: font, band: band))
         }
 
-        // 阅读顺序：屏幕上方的行在前（AppKit y 越大越靠上）
         built.sort { $0.frame.midY > $1.frame.midY }
         lines = built
         clearSelection()
@@ -85,13 +83,21 @@ final class OCRTextOverlayView: NSView {
         clearSelection()
     }
 
+    func selectAll() {
+        guard !lines.isEmpty else { return }
+        let last = lines.count - 1
+        anchor = Caret(line: 0, offset: 0)
+        focus = Caret(line: last, offset: (lines[last].text as NSString).length)
+        refreshSelectionPath()
+    }
+
     @discardableResult
     func copySelectionToPasteboard() -> Bool {
         let text = selectedPlainText()
         guard !text.isEmpty else { return false }
+        // 只写纯文本，清掉 RTF/HTML 等
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.declareTypes([.string], owner: nil)
         pb.setString(text, forType: .string)
         return true
     }
@@ -112,13 +118,21 @@ final class OCRTextOverlayView: NSView {
         return parts.joined(separator: "\n")
     }
 
-    // MARK: - Mouse (跨行拖选)
+    // MARK: - Mouse
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let p = convert(event.locationInWindow, from: nil)
+        mouseDownPoint = p
+        didDrag = false
+
+        if event.clickCount >= 2 {
+            selectWord(at: p)
+            return
+        }
+
         guard let caret = caret(at: p) else {
             clearSelection()
             return
@@ -129,29 +143,108 @@ final class OCRTextOverlayView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard anchor != nil else { return }
         let p = convert(event.locationInWindow, from: nil)
+        if let start = mouseDownPoint,
+           hypot(p.x - start.x, p.y - start.y) > clickSlop {
+            didDrag = true
+        }
+        guard didDrag, anchor != nil else { return }
         focus = caret(at: p) ?? focus
         refreshSelectionPath()
     }
 
     override func mouseUp(with event: NSEvent) {
+        defer {
+            mouseDownPoint = nil
+            didDrag = false
+        }
+        // 单击未拖：选中整行
+        if event.clickCount == 1, !didDrag {
+            let p = convert(event.locationInWindow, from: nil)
+            if let idx = lineIndex(containing: p) ?? nearestLineIndex(to: p) {
+                selectLine(idx)
+            }
+            return
+        }
         let p = convert(event.locationInWindow, from: nil)
         if let c = caret(at: p) { focus = c }
         refreshSelectionPath()
     }
 
+    override func keyDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "a":
+                selectAll()
+                return
+            case "c":
+                _ = copySelectionToPasteboard()
+                return
+            default:
+                break
+            }
+        }
+        super.keyDown(with: event)
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
-        // point 是父视图坐标系，必须用 frame（或 convert 后再比 bounds）
         guard frame.contains(point) else { return nil }
         return self
     }
 
-    // MARK: - Geometry
+    // MARK: - Selection helpers
 
-    private func caret(at point: CGPoint) -> Caret? {
+    private func selectLine(_ index: Int) {
+        guard lines.indices.contains(index) else { return }
+        let len = (lines[index].text as NSString).length
+        anchor = Caret(line: index, offset: 0)
+        focus = Caret(line: index, offset: len)
+        refreshSelectionPath()
+    }
+
+    private func selectWord(at point: CGPoint) {
+        guard let caret = caret(at: point), lines.indices.contains(caret.line) else {
+            clearSelection()
+            return
+        }
+        let text = lines[caret.line].text
+        let range = wordUTF16Range(in: text, around: caret.offset)
+        anchor = Caret(line: caret.line, offset: range.location)
+        focus = Caret(line: caret.line, offset: range.location + range.length)
+        refreshSelectionPath()
+    }
+
+    private func wordUTF16Range(in text: String, around utf16Offset: Int) -> NSRange {
+        let ns = text as NSString
+        let len = ns.length
+        guard len > 0 else { return NSRange(location: 0, length: 0) }
+        let clamped = max(0, min(utf16Offset, len))
+
+        var found = NSRange(location: NSNotFound, length: 0)
+        ns.enumerateSubstrings(in: NSRange(location: 0, length: len), options: .byWords) { _, range, _, stop in
+            if NSLocationInRange(clamped, range)
+                || (clamped == range.location + range.length && range.length > 0) {
+                found = range
+                stop.pointee = true
+            } else if clamped < range.location {
+                stop.pointee = true
+            }
+        }
+        if found.location != NSNotFound { return found }
+
+        // 无「词」边界时（常见于中文）：选中光标处一个字符
+        if clamped >= len {
+            return NSRange(location: max(0, len - 1), length: len > 0 ? 1 : 0)
+        }
+        return NSRange(location: clamped, length: 1)
+    }
+
+    private func lineIndex(containing point: CGPoint) -> Int? {
+        lines.firstIndex { $0.frame.insetBy(dx: -2, dy: -2).contains(point) }
+    }
+
+    private func nearestLineIndex(to point: CGPoint) -> Int? {
         guard !lines.isEmpty else { return nil }
-        // 最近行（垂直）
         var best = 0
         var bestDist = CGFloat.greatestFiniteMagnitude
         for (i, line) in lines.enumerated() {
@@ -164,6 +257,11 @@ final class OCRTextOverlayView: NSView {
                 best = i
             }
         }
+        return best
+    }
+
+    private func caret(at point: CGPoint) -> Caret? {
+        guard let best = lineIndex(containing: point) ?? nearestLineIndex(to: point) else { return nil }
         let offset = utf16Offset(in: lines[best], atX: point.x)
         return Caret(line: best, offset: offset)
     }
@@ -208,16 +306,14 @@ final class OCRTextOverlayView: NSView {
             let a = max(0, min(start, ns.length))
             let b = max(a, min(end, ns.length))
             guard b > a else { continue }
-            // 选区落在 Vision 识别框内，按字符比例映射，避免系统字宽估算出框
             let x0 = xPosition(for: a, in: line)
             let x1 = xPosition(for: b, in: line)
-            let rect = CGRect(
+            path.addRect(CGRect(
                 x: x0,
                 y: line.frame.minY,
                 width: max(2, x1 - x0),
                 height: line.frame.height
-            )
-            path.addRect(rect)
+            ))
         }
         selectionLayer.path = path
     }
