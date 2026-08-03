@@ -74,11 +74,15 @@ final class CaptureToolbar: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         let blur = NSVisualEffectView(frame: .zero)
-        blur.material = .hudWindow
+        blur.material = .popover
+        blur.blendingMode = .withinWindow
         blur.state = .active
+        blur.appearance = NSAppearance(named: .vibrantLight)
         blur.wantsLayer = true
         blur.layer?.cornerRadius = 10
         blur.layer?.masksToBounds = true
+        blur.layer?.borderWidth = 0.5
+        blur.layer?.borderColor = NSColor.white.withAlphaComponent(0.65).cgColor
         blur.translatesAutoresizingMaskIntoConstraints = false
 
         rootStack.orientation = .vertical
@@ -175,16 +179,18 @@ final class CaptureToolbar: NSPanel {
     }
 
     private func refreshSelectionUI() {
+        let idle = NSColor(calibratedWhite: 0.2, alpha: 1)
         for (t, b) in toolButtons {
             let on = t == selectedTool
             b.state = on ? .on : .off
-            b.contentTintColor = on ? .controlAccentColor : .labelColor
+            let color: NSColor = on ? .controlAccentColor : idle
+            b.contentTintColor = color
             if t == .text {
                 b.attributedTitle = NSAttributedString(
                     string: "T",
                     attributes: [
                         .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
-                        .foregroundColor: on ? NSColor.controlAccentColor : NSColor.labelColor,
+                        .foregroundColor: color,
                     ]
                 )
             }
@@ -193,8 +199,8 @@ final class CaptureToolbar: NSPanel {
         row2.isHidden = !showShapeRow
         rectButton.state = shapeStyle == .rect ? .on : .off
         ellipseButton.state = shapeStyle == .ellipse ? .on : .off
-        rectButton.contentTintColor = shapeStyle == .rect ? .controlAccentColor : .labelColor
-        ellipseButton.contentTintColor = shapeStyle == .ellipse ? .controlAccentColor : .labelColor
+        rectButton.contentTintColor = shapeStyle == .rect ? .controlAccentColor : idle
+        ellipseButton.contentTintColor = shapeStyle == .ellipse ? .controlAccentColor : idle
         refreshHeight()
     }
 
@@ -220,7 +226,7 @@ final class CaptureToolbar: NSPanel {
         b.target = self
         b.action = #selector(toolAction(_:))
         b.imagePosition = .imageOnly
-        b.contentTintColor = .labelColor
+        b.contentTintColor = NSColor(calibratedWhite: 0.2, alpha: 1)
         b.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             b.widthAnchor.constraint(equalToConstant: buttonSize),
@@ -230,13 +236,14 @@ final class CaptureToolbar: NSPanel {
     }
 
     private func glyphBtn(_ glyph: String, tip: String, tag: Int) -> NSButton {
+        let idle = NSColor(calibratedWhite: 0.2, alpha: 1)
         let b = iconBtn("circle", tip: tip, tag: tag)
         b.image = nil
         b.attributedTitle = NSAttributedString(
             string: glyph,
             attributes: [
                 .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
-                .foregroundColor: NSColor.labelColor,
+                .foregroundColor: idle,
             ]
         )
         b.imagePosition = .noImage
@@ -253,7 +260,7 @@ final class CaptureToolbar: NSPanel {
     private func sep() -> NSView {
         let v = NSView()
         v.wantsLayer = true
-        v.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
+        v.layer?.backgroundColor = NSColor(calibratedWhite: 0.55, alpha: 0.45).cgColor
         v.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             v.widthAnchor.constraint(equalToConstant: 1),

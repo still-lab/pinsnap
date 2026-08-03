@@ -1122,7 +1122,7 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
         dimLayer.fillColor = NSColor.black.withAlphaComponent(0.45).cgColor
         dimLayer.fillRule = .evenOdd
         dimLayer.frame = bounds
-        dimLayer.allowsEdgeAntialiasing = true
+        dimLayer.allowsEdgeAntialiasing = false
 
         // 窗口悬停：仅描边提示可吸附，不加蓝色填充蒙版
         hoverLayer.fillColor = nil
@@ -1131,11 +1131,14 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
         hoverLayer.lineDashPattern = [6, 4]
         hoverLayer.frame = bounds
         hoverLayer.isHidden = true
+        hoverLayer.allowsEdgeAntialiasing = false
 
         selectionBorder.fillColor = nil
         selectionBorder.strokeColor = NSColor.white.cgColor
         selectionBorder.lineWidth = 2
         selectionBorder.frame = bounds
+        selectionBorder.allowsEdgeAntialiasing = false
+        selectionBorder.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
 
         annotationLayer.frame = bounds
         annotationLayer.masksToBounds = false
@@ -1166,9 +1169,11 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
         dimPath.addRect(bounds)
 
         if let sel = selection, sel.screenID == screenFrame.screenID {
-            let local = convertFromGlobal(sel.logicalRect)
+            let local = pixelAlign(convertFromGlobal(sel.logicalRect))
             dimPath.addRect(local)
-            selectionBorder.path = CGPath(rect: local, transform: nil)
+            // 描边画在选区外侧（线宽一半），避免与挖空边抢同一像素导致闪动
+            let border = local.insetBy(dx: -1, dy: -1)
+            selectionBorder.path = CGPath(rect: border, transform: nil)
             selectionBorder.isHidden = false
             renderAnnotations(shapes: shapes, draft: draft, in: local)
         } else {
@@ -1180,9 +1185,9 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
         dimLayer.path = dimPath
 
         if let hover, !locked {
-            let local = convertFromGlobal(hover.logicalBounds)
+            let local = pixelAlign(convertFromGlobal(hover.logicalBounds))
             if bounds.intersects(local) {
-                hoverLayer.path = CGPath(rect: local, transform: nil)
+                hoverLayer.path = CGPath(rect: local.insetBy(dx: -1, dy: -1), transform: nil)
                 hoverLayer.isHidden = false
             } else {
                 hoverLayer.isHidden = true
@@ -1192,6 +1197,17 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
         }
 
         CATransaction.commit()
+    }
+
+    /// 对齐到物理像素，消除拖动时边框亚像素抖动。
+    private func pixelAlign(_ rect: CGRect) -> CGRect {
+        let s = max(window?.backingScaleFactor ?? screenFrame?.scale ?? 2, 1)
+        return CGRect(
+            x: (rect.minX * s).rounded() / s,
+            y: (rect.minY * s).rounded() / s,
+            width: max(1 / s, (rect.width * s).rounded() / s),
+            height: max(1 / s, (rect.height * s).rounded() / s)
+        )
     }
 
     private func renderAnnotations(shapes: [Shape], draft: Shape?, in selectionLocal: CGRect) {
