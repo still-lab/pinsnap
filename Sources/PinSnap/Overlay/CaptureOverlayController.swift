@@ -746,14 +746,62 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
         DispatchQueue.main.async { [weak self, weak field] in
             guard let self, let field else { return }
             self.window?.makeFirstResponder(field)
-            // 截图像素偏暗时系统默认黑光标几乎看不见，跟文字同色
-            if let editor = field.currentEditor() as? NSTextView {
-                editor.insertionPointColor = color
-            }
-            if !initial.isEmpty {
-                field.currentEditor()?.selectedRange = NSRange(location: initial.count, length: 0)
-            }
+            guard let editor = field.currentEditor() as? NSTextView else { return }
+            editor.insertionPointColor = color
+            let caretIndex = initial.count
+            editor.selectedRange = NSRange(location: caretIndex, length: 0)
+            // 对齐插入条几何中心（midY），不是 caret.origin（底边）
+            self.alignTextField(field, editor: editor, caretIndex: caretIndex, to: origin)
+            self.reseatFieldEditor(field, editor: editor, caretIndex: caretIndex, color: color)
+            // select 可能微移 titleRect，再补一次
+            self.alignTextField(field, editor: editor, caretIndex: caretIndex, to: origin)
+            self.reseatFieldEditor(field, editor: editor, caretIndex: caretIndex, color: color)
         }
+    }
+
+    /// 将 field editor 插入点锚点 `(minX, midY)` 平移到目标点击点。
+    private func alignTextField(
+        _ field: NSTextField,
+        editor: NSTextView,
+        caretIndex: Int,
+        to target: CGPoint
+    ) {
+        guard let window else { return }
+        let caretScreen = editor.firstRect(
+            forCharacterRange: NSRange(location: caretIndex, length: 0),
+            actualRange: nil
+        )
+        guard caretScreen.height > 0 else { return }
+        let caretWindow = window.convertFromScreen(caretScreen)
+        // X：落字左缘；Y：插入条几何中心（居中对齐）
+        let anchorInView = convert(
+            CGPoint(x: caretWindow.minX, y: caretWindow.midY),
+            from: nil
+        )
+        let dx = target.x - anchorInView.x
+        let dy = target.y - anchorInView.y
+        guard abs(dx) > 0.5 || abs(dy) > 0.5 else { return }
+        field.setFrameOrigin(NSPoint(
+            x: field.frame.origin.x + dx,
+            y: field.frame.origin.y + dy
+        ))
+    }
+
+    private func reseatFieldEditor(
+        _ field: NSTextField,
+        editor: NSTextView,
+        caretIndex: Int,
+        color: NSColor
+    ) {
+        field.cell?.select(
+            withFrame: field.bounds,
+            in: field,
+            editor: editor,
+            delegate: self,
+            start: caretIndex,
+            length: 0
+        )
+        editor.insertionPointColor = color
     }
 
     func endTextInput() {
