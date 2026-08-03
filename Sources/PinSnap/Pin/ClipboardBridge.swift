@@ -96,7 +96,7 @@ public struct ClipboardBridge: ClipboardBridgeProtocol {
 
 private extension NSColor {
     convenience init?(hex: String) {
-        var t = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        let t = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         guard t.count == 6, let v = UInt32(t, radix: 16) else { return nil }
         self.init(
             srgbRed: CGFloat((v >> 16) & 0xff) / 255,
