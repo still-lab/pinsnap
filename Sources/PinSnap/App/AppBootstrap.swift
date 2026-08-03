@@ -1,24 +1,48 @@
 import AppKit
-import SwiftUI
+import Foundation
 
-/// 应用入口占位。M0 在 Xcode 工程中改为 @main 并挂 MenuBar。
-/// REQ: S-01
+/// 应用入口编排。
 @MainActor
 public final class AppBootstrap {
     public static let shared = AppBootstrap()
 
+    public private(set) lazy var gate = FeatureGate.shared
+    public private(set) lazy var pins = PinStore(gate: gate)
     public private(set) lazy var coordinator = SessionCoordinator(
         capture: CaptureService(),
-        pins: PinStore(gate: FeatureGate.shared),
+        pins: pins,
         export: ImageExporter(),
-        gate: FeatureGate.shared
+        gate: gate
     )
-
-    public private(set) lazy var hotKeys = HotKeyCenter(coordinator: coordinator)
+    public private(set) lazy var hotKeys = HotKeyCenter()
+    public var presentPermission: (() -> Void)?
+    public var presentUpgrade: (() -> Void)?
+    public var presentSettings: (() -> Void)?
 
     private init() {}
 
     public func start() {
-        // M0: 注册热键、检查权限状态、恢复 Pin 会话
+        coordinator.onNeedPermission = { [weak self] in self?.presentPermission?() }
+        coordinator.onFreeLimit = { [weak self] in self?.presentUpgrade?() }
+        hotKeys.onAction = { [weak self] action in
+            guard let self else { return }
+            switch action {
+            case .capture: self.coordinator.beginCapture()
+            case .paste: self.coordinator.beginPasteFromClipboard()
+            case .togglePins: self.coordinator.togglePinVisibility()
+            }
+        }
+        do {
+            try hotKeys.register()
+        } catch {
+            PinSnapLog.app.error("hotkey: \(error.localizedDescription)")
+        }
+        coordinator.restorePins()
+        Task { await StoreClient.shared.refreshEntitlements() }
+        PinSnapLog.app.info("PinSnap started")
+    }
+
+    public func stop() {
+        hotKeys.unregister()
     }
 }

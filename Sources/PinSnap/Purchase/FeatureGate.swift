@@ -1,6 +1,6 @@
 import Foundation
+import StoreKit
 
-/// Pro 能力枚举。REQ: S-10
 public enum Feature: String, CaseIterable, Codable, Sendable {
     case pinUnlimited
     case pinGroups
@@ -9,6 +9,7 @@ public enum Feature: String, CaseIterable, Codable, Sendable {
     case delayCapture
     case advancedAnnotate
     case filenameTemplate
+    case ocr
 }
 
 @MainActor
@@ -17,13 +18,15 @@ public protocol FeatureGateProtocol: AnyObject {
     func isEnabled(_ feature: Feature) -> Bool
 }
 
-/// StoreKit 接通前可用 stub；开发期可强制 isPro。
 @MainActor
 public final class FeatureGate: FeatureGateProtocol {
     public static let shared = FeatureGate()
 
-    /// 开发开关：true 时视为已购 Pro（勿带进 Release）。
+    #if DEBUG
     public var debugForcePro = false
+    #else
+    public var debugForcePro = false
+    #endif
 
     public private(set) var isPro = false
 
@@ -31,15 +34,12 @@ public final class FeatureGate: FeatureGateProtocol {
 
     public func isEnabled(_ feature: Feature) -> Bool {
         if debugForcePro || isPro { return true }
-        switch feature {
-        case .pinUnlimited, .pinGroups, .pinClickThrough,
-             .historyReplay, .delayCapture, .advancedAnnotate, .filenameTemplate:
-            return false
-        }
+        return false
     }
 
     public func applyEntitlement(isPro: Bool) {
         self.isPro = isPro
+        PinSnapLog.store.info("isPro=\(isPro)")
     }
 }
 
@@ -47,4 +47,52 @@ public enum StoreProductID {
     public static let monthly = "app.pinsnap.pro.monthly"
     public static let yearly = "app.pinsnap.pro.yearly"
     public static let lifetime = "app.pinsnap.pro.lifetime"
+    public static let all = [monthly, yearly, lifetime]
+}
+
+@MainActor
+public final class StoreClient {
+    public static let shared = StoreClient()
+    public private(set) var products: [Product] = []
+
+    private init() {}
+
+    public func refreshEntitlements() async {
+        var pro = false
+        for await result in Transaction.currentEntitlements {
+            if case .verified(let t) = result {
+                if StoreProductID.all.contains(t.productID) {
+                    pro = true
+                }
+            }
+        }
+        FeatureGate.shared.applyEntitlement(isPro: pro)
+    }
+
+    public func loadProducts() async {
+        do {
+            products = try await Product.products(for: Set(StoreProductID.all))
+        } catch {
+            PinSnapLog.store.error("products: \(error.localizedDescription)")
+        }
+    }
+
+    public func purchase(_ product: Product) async throws {
+        let result = try await product.purchase()
+        switch result {
+        case .success(let verification):
+            if case .verified = verification {
+                await refreshEntitlements()
+            }
+        case .userCancelled, .pending:
+            break
+        @unknown default:
+            break
+        }
+    }
+
+    public func restore() async throws {
+        try await AppStore.sync()
+        await refreshEntitlements()
+    }
 }

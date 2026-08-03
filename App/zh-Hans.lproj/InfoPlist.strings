@@ -1,0 +1,2 @@
+"NSScreenCaptureUsageDescription" = "用于在你按下截图快捷键时捕获选定屏幕区域，以便标注、复制、保存或贴图。默认不上传。";
+"CFBundleDisplayName" = "截图与贴图";

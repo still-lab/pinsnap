@@ -1,53 +1,63 @@
 import AppKit
+import Carbon
 import Foundation
 
-/// 全局热键。默认 ⌃⇧A / ⌃⇧V / ⌃⇧H，可在设置中修改。
-/// REQ: S-02
+/// 全局热键。默认 ⌃⇧A / ⌃⇧V / ⌃⇧H。
 @MainActor
 public final class HotKeyCenter {
-    public struct Binding: Equatable {
-        public var capture: KeyboardShortcutSpec
-        public var paste: KeyboardShortcutSpec
-        public var togglePins: KeyboardShortcutSpec
-
-        public static let `default` = Binding(
-            capture: .init(keyCode: 0, modifiers: [.control, .shift]), // A — M0 用真实 KeyCode
-            paste: .init(keyCode: 9, modifiers: [.control, .shift]),   // V
-            togglePins: .init(keyCode: 4, modifiers: [.control, .shift]) // H
-        )
+    public enum Action: UInt32 {
+        case capture = 1
+        case paste = 2
+        case togglePins = 3
     }
 
-    private weak var coordinator: SessionCoordinator?
-    public var binding: Binding = .default
+    public var onAction: ((Action) -> Void)?
+    private var hotKeys: [EventHotKeyRef?] = []
+    private var handler: EventHandlerRef?
+    private static weak var shared: HotKeyCenter?
 
-    public init(coordinator: SessionCoordinator) {
-        self.coordinator = coordinator
-    }
+    public init() {}
 
     public func register() throws {
-        // M0: 注册系统热键；冲突时抛错供 UI 提示
+        HotKeyCenter.shared = self
+        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        let handler: EventHandlerUPP = { (_, event, _) -> OSStatus in
+            var hk = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hk)
+            Task { @MainActor in
+                if let action = Action(rawValue: hk.id) {
+                    HotKeyCenter.shared?.onAction?(action)
+                }
+            }
+            return noErr
+        }
+        InstallEventHandler(GetApplicationEventTarget(), handler, 1, &eventType, nil, &self.handler)
+
+        let mods = UInt32(controlKey + shiftKey)
+        try install(id: Action.capture.rawValue, key: UInt32(kVK_ANSI_A), mods: mods)
+        try install(id: Action.paste.rawValue, key: UInt32(kVK_ANSI_V), mods: mods)
+        try install(id: Action.togglePins.rawValue, key: UInt32(kVK_ANSI_H), mods: mods)
+        PinSnapLog.app.info("Hotkeys registered ⌃⇧A/V/H")
     }
 
     public func unregister() {
-        // M0
-    }
-}
-
-public struct KeyboardShortcutSpec: Equatable, Codable {
-    public var keyCode: UInt16
-    public var modifiers: Modifiers
-
-    public struct Modifiers: OptionSet, Codable, Equatable {
-        public let rawValue: UInt
-        public init(rawValue: UInt) { self.rawValue = rawValue }
-        public static let control = Modifiers(rawValue: 1 << 0)
-        public static let shift = Modifiers(rawValue: 1 << 1)
-        public static let option = Modifiers(rawValue: 1 << 2)
-        public static let command = Modifiers(rawValue: 1 << 3)
+        for ref in hotKeys {
+            if let ref { UnregisterEventHotKey(ref) }
+        }
+        hotKeys.removeAll()
+        if let handler {
+            RemoveEventHandler(handler)
+            self.handler = nil
+        }
     }
 
-    public init(keyCode: UInt16, modifiers: Modifiers) {
-        self.keyCode = keyCode
-        self.modifiers = modifiers
+    private func install(id: UInt32, key: UInt32, mods: UInt32) throws {
+        var hotKeyRef: EventHotKeyRef?
+        var hotKeyID = EventHotKeyID(signature: OSType(0x504E5350), id: id) // 'PNSP'
+        let status = RegisterEventHotKey(key, mods, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
+        guard status == noErr else {
+            throw CaptureError.failed("热键注册失败 (\(status))")
+        }
+        hotKeys.append(hotKeyRef)
     }
 }

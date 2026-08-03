@@ -1,11 +1,132 @@
-import Foundation
+import AppKit
+import SwiftUI
 
-/// SwiftUI Settings 将在 M0 接入 Xcode 的 Settings scene。
-/// REQ: S-04
-public enum SettingsRoute: String, Sendable {
-    case general
-    case hotkeys
-    case save
-    case purchase
-    case about
+public enum SettingsRoute: String, Sendable, CaseIterable, Identifiable, Hashable {
+    case general, hotkeys, save, purchase, about
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .general: return "通用"
+        case .hotkeys: return "快捷键"
+        case .save: return "存储"
+        case .purchase: return "Pro"
+        case .about: return "关于"
+        }
+    }
+}
+
+public struct SettingsRootView: View {
+    @State private var route: SettingsRoute = .general
+    @State private var launchAtLogin = false
+    @State private var cancelOnActivate = false
+    @State private var captureCursor = false
+    @AppStorage("pinsnap.filenameTemplate") private var template = FilenameTemplate.default.pattern
+
+    public init() {}
+
+    public var body: some View {
+        HStack(spacing: 0) {
+            List(SettingsRoute.allCases, selection: $route) { r in
+                Text(r.title).tag(r)
+            }
+            .frame(width: 120)
+            Group {
+                switch route {
+                case .general:
+                    Form {
+                        Toggle("开机启动", isOn: $launchAtLogin)
+                        Toggle("外部激活取消截图", isOn: $cancelOnActivate)
+                        Toggle("捕捉光标", isOn: $captureCursor)
+                    }
+                case .hotkeys:
+                    Form {
+                        LabeledContent("截图", value: "⌃⇧A")
+                        LabeledContent("贴图", value: "⌃⇧V")
+                        LabeledContent("显隐贴图", value: "⌃⇧H")
+                    }
+                case .save:
+                    Form {
+                        TextField("文件名模板", text: $template)
+                        Text("默认 png · 保存时可选目录").foregroundStyle(.secondary)
+                    }
+                case .purchase:
+                    UpgradeView()
+                case .about:
+                    Form {
+                        LabeledContent("版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
+                        Link("隐私政策", destination: URL(string: "https://example.com/pinsnap/privacy")!)
+                        Link("使用条款", destination: URL(string: "https://example.com/pinsnap/terms")!)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding()
+        }
+        .frame(width: 460, height: 320)
+    }
+}
+
+public struct UpgradeView: View {
+    @State private var productsLoaded = false
+
+    public init() {}
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("PinSnap Pro").font(.title2.bold())
+            Text("· 无限贴图\n· 穿透 / 分组 / 会话\n· OCR 与进阶能力").font(.body)
+            HStack {
+                Button("¥8/月") { Task { await buy(StoreProductID.monthly) } }
+                Button("¥48/年") { Task { await buy(StoreProductID.yearly) } }
+                Button("¥98 买断") { Task { await buy(StoreProductID.lifetime) } }
+            }
+            Button("恢复购买") {
+                Task { try? await StoreClient.shared.restore() }
+            }
+            if FeatureGate.shared.isPro {
+                Text("已解锁 Pro").foregroundStyle(.green)
+            }
+        }
+        .padding()
+        .task {
+            await StoreClient.shared.loadProducts()
+            productsLoaded = true
+        }
+    }
+
+    private func buy(_ id: String) async {
+        await StoreClient.shared.loadProducts()
+        if let p = StoreClient.shared.products.first(where: { $0.id == id }) {
+            try? await StoreClient.shared.purchase(p)
+        } else {
+            #if DEBUG
+            FeatureGate.shared.debugForcePro = true
+            FeatureGate.shared.applyEntitlement(isPro: true)
+            Toast.shared.show("调试：已解锁 Pro")
+            #endif
+        }
+    }
+}
+
+public struct PermissionView: View {
+    public var onOpenSettings: () -> Void
+    public var onLater: () -> Void
+
+    public init(onOpenSettings: @escaping () -> Void, onLater: @escaping () -> Void) {
+        self.onOpenSettings = onOpenSettings
+        self.onLater = onLater
+    }
+
+    public var body: some View {
+        VStack(spacing: 16) {
+            Text("屏幕权限").font(.headline)
+            Text("系统设置 → 隐私与安全性 → 屏幕录制").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("打开系统设置", action: onOpenSettings).keyboardShortcut(.defaultAction)
+                Button("稍后", action: onLater)
+            }
+        }
+        .padding(24)
+        .frame(width: 360)
+    }
 }

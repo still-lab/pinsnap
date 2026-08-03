@@ -1,23 +1,31 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
-/// 规划期以 Swift Package 承载接口骨架；M0 迁入 Xcode macOS App Target。
 let package = Package(
-    name: "PinSnap",
+    name: "PinSnapKit",
     platforms: [
         .macOS(.v13),
     ],
     products: [
-        .library(name: "PinSnap", targets: ["PinSnap"]),
+        .library(name: "PinSnapKit", targets: ["PinSnapKit"]),
     ],
     targets: [
         .target(
-            name: "PinSnap",
-            path: "Sources/PinSnap"
+            name: "PinSnapKit",
+            path: "Sources/PinSnap",
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("Carbon"),
+                .linkedFramework("ScreenCaptureKit"),
+                .linkedFramework("StoreKit"),
+                .linkedFramework("Vision"),
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("SwiftUI"),
+            ]
         ),
         .testTarget(
-            name: "PinSnapTests",
-            dependencies: ["PinSnap"],
+            name: "PinSnapKitTests",
+            dependencies: ["PinSnapKit"],
             path: "Tests/PinSnapTests"
         ),
     ]

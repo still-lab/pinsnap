@@ -1,0 +1,42 @@
+name: PinSnap
+options:
+  bundleIdPrefix: app.pinsnap
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+packages:
+  PinSnapKit:
+    path: .
+targets:
+  PinSnap:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+    resources:
+      - path: Resources/Assets.xcassets
+      - path: App/zh-Hans.lproj
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.pinsnap.macos
+        PRODUCT_NAME: PinSnap
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/PinSnap.entitlements
+        COMBINE_HIDPI_IMAGES: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/../Frameworks"]
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+    dependencies:
+      - package: PinSnapKit
+        product: PinSnapKit
+    scheme:
+      testTargets: []

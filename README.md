@@ -25,6 +25,8 @@
 | [docs/DELIVERY_PIPELINE.md](docs/DELIVERY_PIPELINE.md) | 全流程就绪度（需求→呈现） |
 | [docs/UI_SPEC.md](docs/UI_SPEC.md) | UI 线框与信息架构 |
 | [docs/ROADMAP_TASKS.md](docs/ROADMAP_TASKS.md) | 长程细粒度任务清单（370+） |
+| [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) | 实施完成度与运行方式 |
+| [docs/CONNECT_SETUP.md](docs/CONNECT_SETUP.md) | App Store Connect 前置清单 |
 
 ## 源码规划布局
 
@@ -50,12 +52,21 @@ docs/
 - Free：同时最多 3 张贴图，无水印
 - Pro：¥8/月 · ¥48/年 · ¥98 终身
 
-## 本地开发（M0 之后）
+## 本地开发
 
 ```bash
-# 打开 Xcode 工程（M0 生成后）
+# 生成并打开 Xcode 工程（需 Homebrew: xcodegen）
+xcodegen generate
 open PinSnap.xcodeproj
+
+# 或命令行构建
+xcodebuild -scheme PinSnap -configuration Debug -derivedDataPath build/DerivedData build
+
+# 库单测
+swift test
 ```
+
+实施进度见 [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)。
 
 ## License
 

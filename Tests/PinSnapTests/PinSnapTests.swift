@@ -1,51 +1,68 @@
 import CoreGraphics
 import XCTest
-@testable import PinSnap
+@testable import PinSnapKit
 
 final class ScreenGeometryTests: XCTestCase {
-    func testPixelRectScalesByBackingFactor() {
-        // REQ: C-04 — M1 用真实 NSScreen 数据替换硬编码
-        let geometry = ScreenGeometry()
-        let selection = CaptureSelection(
-            screenID: ScreenID(rawValue: 1),
-            logicalRect: CGRect(x: 0, y: 0, width: 100, height: 50)
-        )
-        // 无屏数据时返回 null；实现后断言 scale=2 → 200×100
+    func testPixelRectWithSyntheticScreen() {
+        let geometry = SyntheticGeometry(screens: [
+            ScreenDescriptor(id: ScreenID(rawValue: 1), logicalFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 2),
+        ])
+        let selection = CaptureSelection(screenID: ScreenID(rawValue: 1), logicalRect: CGRect(x: 10, y: 20, width: 100, height: 50))
         let rect = geometry.pixelRect(for: selection)
-        XCTAssertTrue(rect.isNull || rect.width > 0)
+        XCTAssertEqual(rect.width, 200)
+        XCTAssertEqual(rect.height, 100)
+        XCTAssertEqual(rect.origin.x, 20)
+        XCTAssertEqual(rect.origin.y, 40)
+    }
+
+    func testClampRejectsTinyRect() {
+        let geometry = ScreenGeometry()
+        XCTAssertNil(geometry.clampToSingleScreen(.zero))
+    }
+}
+
+struct SyntheticGeometry: ScreenGeometryProtocol {
+    var screensList: [ScreenDescriptor]
+    init(screens: [ScreenDescriptor]) { screensList = screens }
+    func screens() -> [ScreenDescriptor] { screensList }
+    func screen(containing point: CGPoint) -> ScreenDescriptor? { screensList.first }
+    func screen(id: ScreenID) -> ScreenDescriptor? { screensList.first { $0.id == id } }
+    func clampToSingleScreen(_ rect: CGRect) -> CaptureSelection? {
+        guard let s = screensList.first else { return nil }
+        return CaptureSelection(screenID: s.id, logicalRect: rect.intersection(s.logicalFrame))
+    }
+    func pixelRect(for selection: CaptureSelection) -> CGRect {
+        guard let screen = screen(id: selection.screenID) else { return .null }
+        let o = CGPoint(x: selection.logicalRect.minX - screen.logicalFrame.minX, y: selection.logicalRect.minY - screen.logicalFrame.minY)
+        return CGRect(x: o.x * screen.scale, y: o.y * screen.scale, width: selection.logicalRect.width * screen.scale, height: selection.logicalRect.height * screen.scale)
     }
 }
 
 final class PinStoreLimitTests: XCTestCase {
     @MainActor
-    func testFreeLimitIsThree() throws {
-        // REQ: Free ≤3
-        let gate = FeatureGate.shared
-        gate.debugForcePro = false
-        gate.applyEntitlement(isPro: false)
-        let store = PinStore(gate: gate)
-
-        // 无真实 CGImage 时 create 仍占位计数 — M2 补 Image stub
+    func testFreeLimitIsThree() {
+        FeatureGate.shared.debugForcePro = false
+        FeatureGate.shared.applyEntitlement(isPro: false)
+        let store = PinStore(gate: FeatureGate.shared)
         XCTAssertEqual(store.freeLimit, 3)
+        XCTAssertFalse(FeatureGate.shared.isEnabled(.pinUnlimited))
     }
 }
 
 final class FeatureGateTests: XCTestCase {
     @MainActor
     func testProFeaturesLockedWhenFree() {
-        let gate = FeatureGate.shared
-        gate.debugForcePro = false
-        gate.applyEntitlement(isPro: false)
-        XCTAssertFalse(gate.isEnabled(.pinUnlimited))
-        XCTAssertFalse(gate.isEnabled(.pinClickThrough))
+        FeatureGate.shared.debugForcePro = false
+        FeatureGate.shared.applyEntitlement(isPro: false)
+        XCTAssertFalse(FeatureGate.shared.isEnabled(.pinUnlimited))
+        XCTAssertFalse(FeatureGate.shared.isEnabled(.ocr))
     }
 
     @MainActor
     func testDebugForceProUnlocks() {
-        let gate = FeatureGate.shared
-        gate.debugForcePro = true
-        XCTAssertTrue(gate.isEnabled(.pinUnlimited))
-        gate.debugForcePro = false
+        FeatureGate.shared.debugForcePro = true
+        XCTAssertTrue(FeatureGate.shared.isEnabled(.pinUnlimited))
+        FeatureGate.shared.debugForcePro = false
     }
 }
 
@@ -59,5 +76,29 @@ final class AnnotationUndoTests: XCTestCase {
         XCTAssertEqual(controller.document.shapes.count, 0)
         controller.redo()
         XCTAssertEqual(controller.document.shapes.count, 1)
+    }
+}
+
+final class FilenameTemplateTests: XCTestCase {
+    func testRenderTokens() {
+        let name = FilenameTemplate(pattern: "PinSnap-{width}x{height}").render(width: 100, height: 50)
+        XCTAssertEqual(name, "PinSnap-100x50")
+    }
+}
+
+final class ScrollStitchTests: XCTestCase {
+    func testSingleImage() {
+        let img = CGImage.makeSolid(width: 10, height: 10)!
+        XCTAssertNotNil(ScrollStitcher.stitchVertically([img]))
+    }
+}
+
+private extension CGImage {
+    static func makeSolid(width: Int, height: Int) -> CGImage? {
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return ctx.makeImage()
     }
 }

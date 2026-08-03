@@ -1,6 +1,8 @@
 # Xcode
 build/
 DerivedData/
+PinSnap.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
 *.xcuserdata
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
