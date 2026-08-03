@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 
 /// 截图会话编排。
@@ -13,8 +14,8 @@ public final class SessionCoordinator {
     private let clipboard = ClipboardBridge()
     private let overlay = CaptureOverlayController()
     private var lastSelectionImage: CGImage?
-    /// 本进程内只请求一次系统授权，避免每次点截图都弹 TCC。
-    private var didRequestScreenPermissionThisProcess = false
+    /// 本进程最多打开一次系统设置，避免刷屏。
+    private var didOpenScreenSettingsThisProcess = false
 
     public var onFreeLimit: (() -> Void)?
 
@@ -44,6 +45,17 @@ public final class SessionCoordinator {
         guard state == .idle || state == .preparing else { return }
         state = .preparing
 
+        // 未授权时不要调用 ScreenCaptureKit：系统会每次都弹「想要录制屏幕」对话框。
+        if !CGPreflightScreenCaptureAccess() {
+            state = .idle
+            if !didOpenScreenSettingsThisProcess {
+                didOpenScreenSettingsThisProcess = true
+                ScreenPermission.openSystemSettings()
+            }
+            PinSnapLog.capture.error("skip capture: screen recording not granted")
+            return
+        }
+
         do {
             state = .capturing
             let frames = try await capture.captureStillFrames()
@@ -51,10 +63,6 @@ public final class SessionCoordinator {
             overlay.present(frames: frames)
         } catch CaptureError.permissionDenied {
             state = .idle
-            if !didRequestScreenPermissionThisProcess {
-                didRequestScreenPermissionThisProcess = true
-                _ = ScreenPermission.requestAccess()
-            }
             PinSnapLog.capture.error("capture permissionDenied")
         } catch {
             state = .idle

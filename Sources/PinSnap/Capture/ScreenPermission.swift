@@ -57,13 +57,11 @@ public enum ScreenPermission {
         }
     }
 
-    /// 调试：截帧探测结果写到 `/tmp/pinsnap-capture-test.txt`。
+    /// 调试：截帧探测结果写到 `/tmp/pinsnap-capture-test.txt`（不主动弹 TCC）。
     public static func writeCaptureSelfTestReport(to path: String = "/tmp/pinsnap-capture-test.txt") async {
         var lines: [String] = []
         lines.append("preflight=\(CGPreflightScreenCaptureAccess())")
         lines.append("bundle=\(Bundle.main.bundlePath)")
-        lines.append("requested=\(CGRequestScreenCaptureAccess())")
-        lines.append("preflightAfterRequest=\(CGPreflightScreenCaptureAccess())")
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
             lines.append("contentOK displays=\(content.displays.count) ids=\(content.displays.map(\.displayID))")
