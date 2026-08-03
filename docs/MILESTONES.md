@@ -28,12 +28,12 @@
 
 ## M2 — 标注 + 基础贴图（约 2–3 周）
 
-- [ ] Shape：rect/ellipse/line/arrow/freehand/text/mosaic/blur
-- [ ] Undo/Redo
-- [ ] PinPanel：置顶、拖动、滚轮缩放、透明度
-- [ ] 截图 → 贴图出口
-- [ ] 剪贴板图像 → 贴图（⌃⇧V）
-- [ ] Free：第 4 张拦截 + 升级占位 UI
+- [x] Shape：rect/ellipse/line/arrow/freehand/text/mosaic/blur
+- [x] Undo/Redo
+- [x] PinPanel：置顶、拖动、滚轮缩放、透明度
+- [x] 截图 → 贴图出口
+- [x] 剪贴板图像 → 贴图（⌃⇧V）
+- [x] Free：第 4 张拦截 + 升级占位 UI
 
 **验收：** 截→标→贴主路径；A-01–03；P-01/02/04。
 

@@ -126,6 +126,7 @@ public final class AnnotationController: AnnotationControlling {
     }
 
     public var canUndo: Bool { !undoStack.isEmpty }
+    public var canRedo: Bool { !redoStack.isEmpty }
 
     /// text 的 lineWidth 即逻辑点字号。
     public static func textFont(size: CGFloat) -> NSFont {

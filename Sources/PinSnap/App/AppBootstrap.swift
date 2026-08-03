@@ -47,10 +47,7 @@ public final class AppBootstrap {
         applyHotKeyRegistration()
         coordinator.restorePins()
         Task { await StoreClient.shared.refreshEntitlements() }
-        #if DEBUG
-        // 本地联调：默认解锁 Pro，便于测 OCR 等门控能力
-        FeatureGate.shared.debugForcePro = true
-        #endif
+        // DEBUG 默认 Free，便于验 ≤3；升级页购买失败时可调试解锁
         PinSnapLog.app.info("PinSnap started (hotKeysDisabled=\(self.hotKeysDisabled))")
     }
 

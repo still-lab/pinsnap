@@ -151,6 +151,18 @@ public final class PinStore: PinStoreProtocol {
         pins[index].frame = frame
     }
 
+    public func updateScale(id: UUID, scale: CGFloat, frame: CGRect) {
+        guard let index = pins.firstIndex(where: { $0.id == id }) else { return }
+        pins[index].scale = scale
+        pins[index].frame = frame
+    }
+
+    public func updateAlpha(id: UUID, alpha: CGFloat) {
+        guard let index = pins.firstIndex(where: { $0.id == id }) else { return }
+        pins[index].alpha = min(1, max(0.15, alpha))
+        panels[id]?.applyAlpha(pins[index].alpha)
+    }
+
     public func close(id: UUID) throws {
         guard let index = pins.firstIndex(where: { $0.id == id }) else { throw PinStoreError.notFound }
         let item = pins.remove(at: index)

@@ -34,6 +34,8 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private var toolbar: CaptureToolbar?
     private var activeTool: CaptureAnnotateTool?
     private var shapeStyle: CaptureShapeStyle = .rect
+    private var arrowStyle: CaptureArrowStyle = .arrow
+    private var mosaicStyle: CaptureMosaicStyle = .mosaic
     private var draftShape: Shape?
     private var annotateStart: CGPoint?
     private var moveGrabStart: CGPoint?
@@ -111,6 +113,8 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         hoverWindow = nil
         activeTool = nil
         shapeStyle = .rect
+        arrowStyle = .arrow
+        mosaicStyle = .mosaic
         draftShape = nil
         annotateStart = nil
         moveGrabStart = nil
@@ -159,7 +163,11 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                 self.commitSave()
                 return nil
             case 6 where cmd:
-                self.toolbarUndo()
+                if event.modifierFlags.contains(.shift) {
+                    self.toolbarRedo()
+                } else {
+                    self.toolbarUndo()
+                }
                 return nil
             case 17 where cmd:
                 self.commitPin()
@@ -575,9 +583,11 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         switch activeTool {
         case .shape:
             return shapeStyle == .ellipse ? .ellipse : .rect
-        case .arrow: return .arrow
+        case .arrow:
+            return arrowStyle == .line ? .line : .arrow
         case .pen: return .freehand
-        case .mosaic: return .mosaic
+        case .mosaic:
+            return mosaicStyle == .blur ? .blur : .mosaic
         case .text: return .text
         case .none: return nil
         }
@@ -599,10 +609,28 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         activeTool = .shape
     }
 
+    func toolbarSelectArrowStyle(_ style: CaptureArrowStyle) {
+        arrowStyle = style
+        activeTool = .arrow
+    }
+
+    func toolbarSelectMosaicStyle(_ style: CaptureMosaicStyle) {
+        mosaicStyle = style
+        activeTool = .mosaic
+    }
+
     func toolbarUndo() {
         exitOCRMode()
         closeTextEditor(commit: false)
         annotations.undo()
+        draftShape = nil
+        syncLayers()
+    }
+
+    func toolbarRedo() {
+        exitOCRMode()
+        closeTextEditor(commit: false)
+        annotations.redo()
         draftShape = nil
         syncLayers()
     }
@@ -726,14 +754,56 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     fileprivate func commitSave() {
-        guard let image = exportImage() else { return }
+        guard let image = exportImage() else {
+            PinSnapLog.app.error("save: exportImage returned nil")
+            return
+        }
+
+        // 菜单栏 App + 全屏 screenSaver 遮罩时，NSSavePanel 常被挡住或无法成为 key。
+        let overlayPanels = panels
+        let bar = toolbar
+        for panel in overlayPanels { panel.orderOut(nil) }
+        bar?.orderOut(nil)
+
+        let previousPolicy = NSApp.activationPolicy()
+        if previousPolicy != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
         panel.nameFieldStringValue = FilenameTemplate.default.render(width: image.width, height: image.height) + ".png"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? exporter.save(image, to: url, format: .png)
-        dismiss()
-        onFinish?(.saved(image))
+        panel.level = .modalPanel
+
+        let result = panel.runModal()
+
+        if previousPolicy != .regular {
+            NSApp.setActivationPolicy(previousPolicy)
+        }
+
+        guard result == .OK, let url = panel.url else {
+            // 取消：恢复遮罩与工具条
+            for p in overlayPanels { p.orderFrontRegardless() }
+            if selectionLocked {
+                showToolbar()
+            }
+            return
+        }
+
+        do {
+            try exporter.save(image, to: url, format: .png)
+            dismiss()
+            onFinish?(.saved(image))
+        } catch {
+            PinSnapLog.app.error("save failed: \(error.localizedDescription)")
+            for p in overlayPanels { p.orderFrontRegardless() }
+            if selectionLocked {
+                showToolbar()
+            }
+        }
     }
 
     fileprivate func commitPin() {
@@ -777,6 +847,8 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         }
         guard let toolbar else { return }
         toolbar.setShapeStyle(shapeStyle)
+        toolbar.setArrowStyle(arrowStyle)
+        toolbar.setMosaicStyle(mosaicStyle)
         toolbar.setSelectedTool(activeTool)
         repositionToolbar()
     }
@@ -830,7 +902,11 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         case 8 where event.modifierFlags.contains(.command): commitCopy()
         case 1 where event.modifierFlags.contains(.command): commitSave()
         case 6 where event.modifierFlags.contains(.command):
-            toolbarUndo()
+            if event.modifierFlags.contains(.shift) {
+                toolbarRedo()
+            } else {
+                toolbarUndo()
+            }
         case 17 where event.modifierFlags.contains(.command):
             commitPin()
         default: break

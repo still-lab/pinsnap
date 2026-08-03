@@ -24,11 +24,24 @@ enum CaptureShapeStyle: Int {
     case ellipse
 }
 
+enum CaptureArrowStyle: Int {
+    case line
+    case arrow
+}
+
+enum CaptureMosaicStyle: Int {
+    case mosaic
+    case blur
+}
+
 @MainActor
 protocol CaptureToolbarDelegate: AnyObject {
     func toolbarSelectTool(_ tool: CaptureAnnotateTool?)
     func toolbarSelectShapeStyle(_ style: CaptureShapeStyle)
+    func toolbarSelectArrowStyle(_ style: CaptureArrowStyle)
+    func toolbarSelectMosaicStyle(_ style: CaptureMosaicStyle)
     func toolbarUndo()
+    func toolbarRedo()
     func toolbarOCR()
     func toolbarCopy()
     func toolbarSave()
@@ -36,7 +49,7 @@ protocol CaptureToolbarDelegate: AnyObject {
     func toolbarClose()
 }
 
-/// 两层工具条：默认一层；点「形状」后出第二层选矩形/椭圆。
+/// 两层工具条：点「形状」「箭头」「马赛克」展开第二层子项。宽度固定，避免子栏撑开。
 @MainActor
 final class CaptureToolbar: NSPanel {
     weak var actionHandler: CaptureToolbarDelegate?
@@ -45,22 +58,34 @@ final class CaptureToolbar: NSPanel {
     private let rowHeight: CGFloat = 40
     private let sidePad: CGFloat = 10
     private let gap: CGFloat = 8
+    private let barWidth: CGFloat = 450
+    private let subRowExtra: CGFloat = 34
+    private let dividerHeight: CGFloat = 1
 
     private var selectedTool: CaptureAnnotateTool?
     private var shapeStyle: CaptureShapeStyle = .rect
+    private var arrowStyle: CaptureArrowStyle = .arrow
+    private var mosaicStyle: CaptureMosaicStyle = .mosaic
 
     private let rootStack = NSStackView()
     private let row1 = NSStackView()
     private let row2 = NSStackView()
     private var toolButtons: [CaptureAnnotateTool: NSButton] = [:]
+
+    private let shapeSubStack = NSStackView()
+    private let arrowSubStack = NSStackView()
+    private let mosaicSubStack = NSStackView()
     private var rectButton: NSButton!
     private var ellipseButton: NSButton!
-
-    private let barWidth: CGFloat = 460
+    private var lineModeButton: NSButton!
+    private var arrowModeButton: NSButton!
+    private var mosaicModeButton: NSButton!
+    private var blurModeButton: NSButton!
+    private var rowDivider: NSView!
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: rowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: 450, height: rowHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -73,34 +98,36 @@ final class CaptureToolbar: NSPanel {
         hidesOnDeactivate = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        let blur = NSVisualEffectView(frame: .zero)
-        blur.material = .popover
-        blur.blendingMode = .withinWindow
-        blur.state = .active
-        blur.appearance = NSAppearance(named: .vibrantLight)
-        blur.wantsLayer = true
-        blur.layer?.cornerRadius = 10
-        blur.layer?.masksToBounds = true
-        blur.layer?.borderWidth = 0.5
-        blur.layer?.borderColor = NSColor.white.withAlphaComponent(0.65).cgColor
-        blur.translatesAutoresizingMaskIntoConstraints = false
+        let chrome = NSVisualEffectView(frame: .zero)
+        chrome.material = .popover
+        chrome.blendingMode = .withinWindow
+        chrome.state = .active
+        chrome.appearance = NSAppearance(named: .vibrantLight)
+        chrome.wantsLayer = true
+        chrome.layer?.cornerRadius = 10
+        chrome.layer?.masksToBounds = true
+        chrome.layer?.borderWidth = 0.5
+        chrome.layer?.borderColor = NSColor.white.withAlphaComponent(0.65).cgColor
+        chrome.translatesAutoresizingMaskIntoConstraints = false
 
         rootStack.orientation = .vertical
         rootStack.spacing = 0
         rootStack.alignment = .leading
         rootStack.translatesAutoresizingMaskIntoConstraints = false
-        blur.addSubview(rootStack)
+        chrome.addSubview(rootStack)
 
         row1.orientation = .horizontal
         row1.spacing = gap
         row1.alignment = .centerY
         row1.edgeInsets = NSEdgeInsets(top: 5, left: sidePad, bottom: 5, right: sidePad)
+        row1.translatesAutoresizingMaskIntoConstraints = false
 
         row2.orientation = .horizontal
         row2.spacing = gap
         row2.alignment = .centerY
-        row2.edgeInsets = NSEdgeInsets(top: 0, left: sidePad, bottom: 5, right: sidePad)
+        row2.edgeInsets = NSEdgeInsets(top: 4, left: sidePad, bottom: 5, right: sidePad)
         row2.isHidden = true
+        row2.translatesAutoresizingMaskIntoConstraints = false
 
         // 第一层
         let shapeBtn = iconBtn("rectangle.on.rectangle", tip: "形状", tag: CaptureAnnotateTool.shape.rawValue)
@@ -116,6 +143,7 @@ final class CaptureToolbar: NSPanel {
         row1.addArrangedSubview(tBtn)
         row1.addArrangedSubview(sep())
         row1.addArrangedSubview(actionBtn("arrow.uturn.backward", tip: "撤销", #selector(undoAction)))
+        row1.addArrangedSubview(actionBtn("arrow.uturn.forward", tip: "重做", #selector(redoAction)))
         row1.addArrangedSubview(sep())
         row1.addArrangedSubview(actionBtn("doc.text.magnifyingglass", tip: "OCR", #selector(ocrAction)))
         row1.addArrangedSubview(actionBtn("doc.on.doc", tip: "复制", #selector(copyAction)))
@@ -123,30 +151,61 @@ final class CaptureToolbar: NSPanel {
         row1.addArrangedSubview(actionBtn("pin", tip: "贴图", #selector(pinAction)))
         row1.addArrangedSubview(actionBtn("xmark", tip: "关闭", #selector(closeAction)))
 
-        // 第二层：矩形 / 椭圆
+        configureSubStack(shapeSubStack)
         rectButton = iconBtn("rectangle", tip: "矩形", tag: 100)
         rectButton.action = #selector(shapeStyleAction(_:))
         ellipseButton = iconBtn("oval", tip: "椭圆", tag: 101)
         ellipseButton.action = #selector(shapeStyleAction(_:))
-        row2.addArrangedSubview(rectButton)
-        row2.addArrangedSubview(ellipseButton)
+        shapeSubStack.addArrangedSubview(rectButton)
+        shapeSubStack.addArrangedSubview(ellipseButton)
+
+        configureSubStack(arrowSubStack)
+        lineModeButton = iconBtn("line.diagonal", tip: "直线", tag: 110)
+        lineModeButton.action = #selector(arrowStyleAction(_:))
+        arrowModeButton = iconBtn("arrow.up.right", tip: "箭头", tag: 111)
+        arrowModeButton.action = #selector(arrowStyleAction(_:))
+        arrowSubStack.addArrangedSubview(lineModeButton)
+        arrowSubStack.addArrangedSubview(arrowModeButton)
+
+        configureSubStack(mosaicSubStack)
+        mosaicModeButton = iconBtn("square.grid.2x2.fill", tip: "马赛克", tag: 200)
+        mosaicModeButton.action = #selector(mosaicStyleAction(_:))
+        blurModeButton = iconBtn("aqi.medium", tip: "高斯模糊", tag: 201)
+        blurModeButton.action = #selector(mosaicStyleAction(_:))
+        mosaicSubStack.addArrangedSubview(mosaicModeButton)
+        mosaicSubStack.addArrangedSubview(blurModeButton)
+
+        rowDivider = NSView()
+        rowDivider.wantsLayer = true
+        rowDivider.layer?.backgroundColor = NSColor(calibratedWhite: 0.55, alpha: 0.35).cgColor
+        rowDivider.translatesAutoresizingMaskIntoConstraints = false
+        rowDivider.isHidden = true
 
         rootStack.addArrangedSubview(row1)
+        rootStack.addArrangedSubview(rowDivider)
         rootStack.addArrangedSubview(row2)
 
-        contentView = blur
+        contentView = chrome
         NSLayoutConstraint.activate([
-            rootStack.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
-            rootStack.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
-            rootStack.topAnchor.constraint(equalTo: blur.topAnchor),
-            rootStack.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
+            chrome.widthAnchor.constraint(equalToConstant: barWidth),
+            rootStack.leadingAnchor.constraint(equalTo: chrome.leadingAnchor),
+            rootStack.trailingAnchor.constraint(equalTo: chrome.trailingAnchor),
+            rootStack.topAnchor.constraint(equalTo: chrome.topAnchor),
+            rootStack.bottomAnchor.constraint(equalTo: chrome.bottomAnchor),
+            row1.widthAnchor.constraint(equalTo: rootStack.widthAnchor),
+            row2.widthAnchor.constraint(equalTo: rootStack.widthAnchor),
+            rowDivider.heightAnchor.constraint(equalToConstant: dividerHeight),
+            rowDivider.leadingAnchor.constraint(equalTo: rootStack.leadingAnchor, constant: sidePad),
+            rowDivider.trailingAnchor.constraint(equalTo: rootStack.trailingAnchor, constant: -sidePad),
         ])
-        refreshHeight()
+        applyFrame(preserveOrigin: false)
         refreshSelectionUI()
     }
 
     var width: CGFloat { barWidth }
-    var height: CGFloat { row2.isHidden ? rowHeight : rowHeight + 34 }
+    var height: CGFloat {
+        row2.isHidden ? rowHeight : rowHeight + dividerHeight + subRowExtra
+    }
 
     func setSelectedTool(_ tool: CaptureAnnotateTool?) {
         selectedTool = tool
@@ -158,8 +217,17 @@ final class CaptureToolbar: NSPanel {
         refreshSelectionUI()
     }
 
+    func setMosaicStyle(_ style: CaptureMosaicStyle) {
+        mosaicStyle = style
+        refreshSelectionUI()
+    }
+
+    func setArrowStyle(_ style: CaptureArrowStyle) {
+        arrowStyle = style
+        refreshSelectionUI()
+    }
+
     func place(under selection: CGRect, inScreenBounds screen: CGRect, bringToFront: Bool = true) {
-        refreshHeight()
         let h = height
         let w = barWidth
         var x = selection.midX - w / 2
@@ -174,10 +242,24 @@ final class CaptureToolbar: NSPanel {
         }
     }
 
-    private func refreshHeight() {
+    private func configureSubStack(_ stack: NSStackView) {
+        stack.orientation = .horizontal
+        stack.spacing = gap
+        stack.alignment = .centerY
+    }
+
+    private func applyFrame(preserveOrigin: Bool) {
         let h = height
-        setContentSize(NSSize(width: barWidth, height: h))
-        contentView?.setFrameSize(NSSize(width: barWidth, height: h))
+        let w = barWidth
+        if preserveOrigin {
+            // 锁定顶边：子栏向下展开，不把主栏往上顶
+            let top = frame.maxY
+            setFrame(NSRect(x: frame.origin.x, y: top - h, width: w, height: h), display: true)
+        } else {
+            setFrame(NSRect(x: frame.origin.x, y: frame.origin.y, width: w, height: h), display: true)
+        }
+        setContentSize(NSSize(width: w, height: h))
+        contentView?.setFrameSize(NSSize(width: w, height: h))
     }
 
     private func refreshSelectionUI() {
@@ -197,13 +279,44 @@ final class CaptureToolbar: NSPanel {
                 )
             }
         }
-        let showShapeRow = selectedTool == .shape
-        row2.isHidden = !showShapeRow
+
+        let activeSub: NSStackView?
+        switch selectedTool {
+        case .shape: activeSub = shapeSubStack
+        case .arrow: activeSub = arrowSubStack
+        case .mosaic: activeSub = mosaicSubStack
+        default: activeSub = nil
+        }
+
+        // 只挂当前子栏，避免多个 stack 同时参与布局把宽度撑开
+        for stack in [shapeSubStack, arrowSubStack, mosaicSubStack] {
+            if stack.superview != nil { row2.removeArrangedSubview(stack); stack.removeFromSuperview() }
+        }
+        if let activeSub {
+            row2.addArrangedSubview(activeSub)
+            row2.isHidden = false
+            rowDivider.isHidden = false
+        } else {
+            row2.isHidden = true
+            rowDivider.isHidden = true
+        }
+
         rectButton.state = shapeStyle == .rect ? .on : .off
         ellipseButton.state = shapeStyle == .ellipse ? .on : .off
         rectButton.contentTintColor = shapeStyle == .rect ? .controlAccentColor : idle
         ellipseButton.contentTintColor = shapeStyle == .ellipse ? .controlAccentColor : idle
-        refreshHeight()
+
+        lineModeButton.state = arrowStyle == .line ? .on : .off
+        arrowModeButton.state = arrowStyle == .arrow ? .on : .off
+        lineModeButton.contentTintColor = arrowStyle == .line ? .controlAccentColor : idle
+        arrowModeButton.contentTintColor = arrowStyle == .arrow ? .controlAccentColor : idle
+
+        mosaicModeButton.state = mosaicStyle == .mosaic ? .on : .off
+        blurModeButton.state = mosaicStyle == .blur ? .on : .off
+        mosaicModeButton.contentTintColor = mosaicStyle == .mosaic ? .controlAccentColor : idle
+        blurModeButton.contentTintColor = mosaicStyle == .blur ? .controlAccentColor : idle
+
+        applyFrame(preserveOrigin: true)
     }
 
     private func symbol(for tool: CaptureAnnotateTool) -> String {
@@ -211,7 +324,7 @@ final class CaptureToolbar: NSPanel {
         case .shape: return "rectangle.on.rectangle"
         case .arrow: return "arrow.up.right"
         case .pen: return "pencil.tip"
-        case .mosaic: return "square.grid.3x3.fill"
+        case .mosaic: return "square.grid.2x2.fill"
         case .text: return "textformat"
         }
     }
@@ -230,6 +343,8 @@ final class CaptureToolbar: NSPanel {
         b.imagePosition = .imageOnly
         b.contentTintColor = NSColor(calibratedWhite: 0.2, alpha: 1)
         b.translatesAutoresizingMaskIntoConstraints = false
+        b.setContentHuggingPriority(.required, for: .horizontal)
+        b.setContentCompressionResistancePriority(.required, for: .horizontal)
         NSLayoutConstraint.activate([
             b.widthAnchor.constraint(equalToConstant: buttonSize),
             b.heightAnchor.constraint(equalToConstant: buttonSize),
@@ -281,15 +396,13 @@ final class CaptureToolbar: NSPanel {
             actionHandler?.toolbarSelectTool(tool)
             if tool == .shape {
                 actionHandler?.toolbarSelectShapeStyle(shapeStyle)
+            } else if tool == .arrow {
+                actionHandler?.toolbarSelectArrowStyle(arrowStyle)
+            } else if tool == .mosaic {
+                actionHandler?.toolbarSelectMosaicStyle(mosaicStyle)
             }
         }
         refreshSelectionUI()
-        // 高度变化后由外部 place 更稳妥；这里尽量自适配
-        if let screen = NSScreen.main {
-            let f = frame
-            setFrame(NSRect(x: f.origin.x, y: f.origin.y, width: barWidth, height: height), display: true)
-            _ = screen
-        }
     }
 
     @objc private func shapeStyleAction(_ sender: NSButton) {
@@ -300,7 +413,24 @@ final class CaptureToolbar: NSPanel {
         refreshSelectionUI()
     }
 
+    @objc private func arrowStyleAction(_ sender: NSButton) {
+        arrowStyle = sender.tag == 110 ? .line : .arrow
+        selectedTool = .arrow
+        actionHandler?.toolbarSelectTool(.arrow)
+        actionHandler?.toolbarSelectArrowStyle(arrowStyle)
+        refreshSelectionUI()
+    }
+
+    @objc private func mosaicStyleAction(_ sender: NSButton) {
+        mosaicStyle = sender.tag == 201 ? .blur : .mosaic
+        selectedTool = .mosaic
+        actionHandler?.toolbarSelectTool(.mosaic)
+        actionHandler?.toolbarSelectMosaicStyle(mosaicStyle)
+        refreshSelectionUI()
+    }
+
     @objc private func undoAction() { actionHandler?.toolbarUndo() }
+    @objc private func redoAction() { actionHandler?.toolbarRedo() }
     @objc private func ocrAction() { actionHandler?.toolbarOCR() }
     @objc private func copyAction() { actionHandler?.toolbarCopy() }
     @objc private func saveAction() { actionHandler?.toolbarSave() }

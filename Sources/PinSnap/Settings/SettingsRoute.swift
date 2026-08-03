@@ -74,7 +74,7 @@ public struct UpgradeView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("PinSnap Pro").font(.title2.bold())
-            Text("· 无限贴图\n· 穿透 / 分组 / 会话\n· OCR 与进阶能力").font(.body)
+            Text("· 无限贴图\n· 穿透 / 会话恢复\n· OCR 与进阶能力").font(.body)
             HStack {
                 Button("¥8/月") { Task { await buy(StoreProductID.monthly) } }
                 Button("¥48/年") { Task { await buy(StoreProductID.yearly) } }
