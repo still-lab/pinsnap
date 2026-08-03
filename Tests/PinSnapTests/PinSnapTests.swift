@@ -93,6 +93,38 @@ final class AnnotationUndoTests: XCTestCase {
         controller.redo()
         XCTAssertEqual(controller.document.shapes.count, 1)
     }
+
+    @MainActor
+    func testMosaicFlattenChangesPixels() {
+        guard let base = CGImage.makeSplit(width: 64, height: 64) else {
+            return XCTFail("base image")
+        }
+        let controller = AnnotationController()
+        controller.add(Shape(
+            kind: .mosaic,
+            points: [CGPoint(x: 8, y: 8), CGPoint(x: 56, y: 56)]
+        ))
+        guard let out = controller.exportFlattened(base: base) else {
+            return XCTFail("export")
+        }
+        XCTAssertEqual(out.width, 64)
+        XCTAssertEqual(out.height, 64)
+        guard let patch = AnnotationController.filteredPatch(
+            kind: .mosaic,
+            rectInBottomLeftPixels: CGRect(x: 8, y: 8, width: 48, height: 48),
+            base: base,
+            mosaicBlock: 8
+        ) else {
+            return XCTFail("filteredPatch")
+        }
+        XCTAssertEqual(patch.width, 48)
+        XCTAssertEqual(patch.height, 48)
+        // 近邻马赛克后，块内像素应一致（取左上 4×4 内两点）
+        guard let pixellated = AnnotationController.pixelateNearest(base, blockPixels: 8) else {
+            return XCTFail("pixelateNearest")
+        }
+        XCTAssertEqual(pixellated.width, 64)
+    }
 }
 
 final class FilenameTemplateTests: XCTestCase {
@@ -140,6 +172,21 @@ private extension CGImage {
         guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return ctx.makeImage()
+    }
+
+    static func makeSplit(width: Int, height: Int) -> CGImage? {
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: width / 2, height: height))
+        ctx.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: width / 2, y: 0, width: width - width / 2, height: height))
         return ctx.makeImage()
     }
 }

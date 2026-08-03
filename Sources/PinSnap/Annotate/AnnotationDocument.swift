@@ -62,7 +62,6 @@ public final class AnnotationController: AnnotationControlling {
     public private(set) var document = AnnotationDocument()
     private var undoStack: [AnnotationDocument] = []
     private var redoStack: [AnnotationDocument] = []
-    private let ci = CIContext()
 
     public init() {}
 
@@ -252,7 +251,8 @@ public final class AnnotationController: AnnotationControlling {
             guard let last = pts.last else { return }
             let r = CGRect(x: min(first.x, last.x), y: min(first.y, last.y),
                            width: abs(last.x - first.x), height: abs(last.y - first.y)).integral
-            applyFilter(kind: shape.kind, rect: r, base: base, ctx: ctx)
+            guard let patch = Self.filteredPatch(kind: shape.kind, rectInBottomLeftPixels: r, base: base) else { return }
+            ctx.draw(patch, in: r)
         case .number:
             let n = shape.text ?? "1"
             let attrs: [NSAttributedString.Key: Any] = [
@@ -290,20 +290,69 @@ public final class AnnotationController: AnnotationControlling {
         ctx.strokePath()
     }
 
-    private func applyFilter(kind: ShapeKind, rect: CGRect, base: CGImage, ctx: CGContext) {
-        guard let cropped = base.cropping(to: rect) else { return }
-        var ci = CIImage(cgImage: cropped)
+    /// `rectInBottomLeftPixels` 与 `CGContext` 绘制坐标系一致（原点在左下）。
+    /// REQ: E-008, E-009
+    public static func filteredPatch(
+        kind: ShapeKind,
+        rectInBottomLeftPixels: CGRect,
+        base: CGImage,
+        mosaicBlock: CGFloat = 16,
+        blurRadius: CGFloat = 8
+    ) -> CGImage? {
+        guard kind == .mosaic || kind == .blur else { return nil }
+        guard let cropped = cropBottomLeft(base, rect: rectInBottomLeftPixels) else { return nil }
         if kind == .mosaic {
-            ci = ci.applyingFilter("CIPixellate", parameters: [kCIInputScaleKey: 12])
-        } else {
-            ci = ci.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 8])
+            return pixelateNearest(cropped, blockPixels: max(4, Int(mosaicBlock.rounded())))
         }
-        if let out = ciContextCreateCGImage(ci, from: ci.extent) {
-            ctx.draw(out, in: rect)
-        }
+        let input = CIImage(cgImage: cropped)
+        let filtered = input
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: max(1, blurRadius)])
+            .cropped(to: input.extent)
+        return CIContext(options: [.useSoftwareRenderer: false]).createCGImage(filtered, from: input.extent)
     }
 
-    private func ciContextCreateCGImage(_ image: CIImage, from rect: CGRect) -> CGImage? {
-        ci.createCGImage(image, from: rect)
+    /// 从左下原点矩形裁剪（内部转换为 CGImage 顶左坐标系）。
+    public static func cropBottomLeft(_ image: CGImage, rect: CGRect) -> CGImage? {
+        let imageBounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        let r = rect.integral.intersection(imageBounds)
+        guard r.width >= 1, r.height >= 1 else { return nil }
+        let topLeft = CGRect(
+            x: r.origin.x,
+            y: CGFloat(image.height) - r.maxY,
+            width: r.width,
+            height: r.height
+        ).integral
+        guard topLeft.width >= 1, topLeft.height >= 1 else { return nil }
+        return image.cropping(to: topLeft)
+    }
+
+    /// 近邻缩小再放大，块状马赛克（比 CIPixellate 更稳、更明显）。
+    public static func pixelateNearest(_ image: CGImage, blockPixels: Int) -> CGImage? {
+        let block = max(2, blockPixels)
+        let w = image.width
+        let h = image.height
+        guard w > 0, h > 0 else { return nil }
+        let sw = max(1, w / block)
+        let sh = max(1, h / block)
+        let cs = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+
+        guard let smallCtx = CGContext(
+            data: nil, width: sw, height: sh,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: cs, bitmapInfo: bitmapInfo
+        ) else { return nil }
+        smallCtx.interpolationQuality = .none
+        smallCtx.draw(image, in: CGRect(x: 0, y: 0, width: sw, height: sh))
+        guard let small = smallCtx.makeImage() else { return nil }
+
+        guard let bigCtx = CGContext(
+            data: nil, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: cs, bitmapInfo: bitmapInfo
+        ) else { return nil }
+        bigCtx.interpolationQuality = .none
+        bigCtx.draw(small, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return bigCtx.makeImage()
     }
 }

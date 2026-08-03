@@ -857,6 +857,7 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
     private let selectionBorder = CAShapeLayer()
     private let annotationLayer = CALayer()
     private var tracking: NSTrackingArea?
+    private var appliedSelection: CaptureSelection?
 
     private var textField: NSTextField?
     private var onTextCommit: ((String) -> Void)?
@@ -1179,6 +1180,7 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
         let dimPath = CGMutablePath()
         dimPath.addRect(bounds)
 
+        appliedSelection = selection
         if let sel = selection, sel.screenID == screenFrame.screenID {
             let local = pixelAlign(convertFromGlobal(sel.logicalRect))
             dimPath.addRect(local)
@@ -1223,14 +1225,58 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
 
     private func renderAnnotations(shapes: [Shape], draft: Shape?, in selectionLocal: CGRect) {
         annotationLayer.sublayers = nil
+        let selectionBase = selectionPixelImage()
+        let scaleX: CGFloat
+        let scaleY: CGFloat
+        if let base = selectionBase, let sel = appliedSelection, sel.logicalRect.width > 0, sel.logicalRect.height > 0 {
+            scaleX = CGFloat(base.width) / sel.logicalRect.width
+            scaleY = CGFloat(base.height) / sel.logicalRect.height
+        } else {
+            let s = screenFrame?.scale ?? 2
+            scaleX = s
+            scaleY = s
+        }
         let all = shapes + (draft.map { [$0] } ?? [])
         for shape in all {
-            guard let shapeLayer = makeShapeLayer(shape, origin: selectionLocal.origin) else { continue }
+            guard let shapeLayer = makeShapeLayer(
+                shape,
+                origin: selectionLocal.origin,
+                selectionBase: selectionBase,
+                scaleX: scaleX,
+                scaleY: scaleY
+            ) else { continue }
             annotationLayer.addSublayer(shapeLayer)
         }
     }
 
-    private func makeShapeLayer(_ shape: Shape, origin: CGPoint) -> CALayer? {
+    /// 选区对应截图像素（相对 `ScreenFrame.logicalBounds`，与导出一致）。
+    private func selectionPixelImage() -> CGImage? {
+        guard let sf = screenFrame, let sel = appliedSelection else { return nil }
+        let lw = sf.logicalBounds.width
+        let lh = sf.logicalBounds.height
+        guard lw > 0, lh > 0 else { return nil }
+        let sx = CGFloat(sf.image.width) / lw
+        let sy = CGFloat(sf.image.height) / lh
+        let originInScreen = CGPoint(
+            x: sel.logicalRect.minX - sf.logicalBounds.minX,
+            y: sel.logicalRect.minY - sf.logicalBounds.minY
+        )
+        let pixelRect = CGRect(
+            x: originInScreen.x * sx,
+            y: originInScreen.y * sy,
+            width: sel.logicalRect.width * sx,
+            height: sel.logicalRect.height * sy
+        )
+        return ImageExporter().crop(sf.image, pixelRect: pixelRect)
+    }
+
+    private func makeShapeLayer(
+        _ shape: Shape,
+        origin: CGPoint,
+        selectionBase: CGImage?,
+        scaleX: CGFloat,
+        scaleY: CGFloat
+    ) -> CALayer? {
         let pts = shape.points.map { CGPoint(x: $0.x + origin.x, y: $0.y + origin.y) }
         guard let first = pts.first else { return nil }
         let color = shape.nsColor.cgColor
@@ -1265,15 +1311,32 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
                 path.addLine(to: CGPoint(x: last.x + cos(angle - .pi * 0.8) * len, y: last.y + sin(angle - .pi * 0.8) * len))
             }
             layer.path = path
-        case .mosaic, .blur, .highlight:
+        case .highlight:
             guard let last = pts.last else { return nil }
             let r = CGRect(x: min(first.x, last.x), y: min(first.y, last.y),
                            width: abs(last.x - first.x), height: abs(last.y - first.y))
             layer.path = CGPath(rect: r, transform: nil)
-            layer.fillColor = shape.kind == .highlight
-                ? shape.nsColor.withAlphaComponent(0.35).cgColor
-                : NSColor.black.withAlphaComponent(0.35).cgColor
+            layer.fillColor = shape.nsColor.withAlphaComponent(0.35).cgColor
             layer.strokeColor = NSColor.white.withAlphaComponent(0.5).cgColor
+        case .mosaic, .blur:
+            guard let last = pts.last else { return nil }
+            let r = CGRect(x: min(first.x, last.x), y: min(first.y, last.y),
+                           width: abs(last.x - first.x), height: abs(last.y - first.y))
+            if let patchLayer = makeFilterPreviewLayer(
+                kind: shape.kind,
+                viewRect: r,
+                selectionOrigin: origin,
+                selectionBase: selectionBase,
+                scaleX: scaleX,
+                scaleY: scaleY
+            ) {
+                return patchLayer
+            }
+            // 滤镜失败时也给可见反馈，避免「完全没效果」
+            layer.path = CGPath(rect: r, transform: nil)
+            layer.fillColor = NSColor.black.withAlphaComponent(0.45).cgColor
+            layer.strokeColor = NSColor.white.withAlphaComponent(0.6).cgColor
+            layer.lineWidth = 1
         case .text:
             let text = shape.text ?? ""
             guard !text.isEmpty else { return nil }
@@ -1296,6 +1359,49 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
             return nil
         }
         return layer
+    }
+
+    /// 马赛克 / 模糊实时预览（与 `exportFlattened` 同一滤镜路径）。REQ: E-008
+    private func makeFilterPreviewLayer(
+        kind: ShapeKind,
+        viewRect: CGRect,
+        selectionOrigin: CGPoint,
+        selectionBase: CGImage?,
+        scaleX: CGFloat,
+        scaleY: CGFloat
+    ) -> CALayer? {
+        guard let selectionBase, viewRect.width >= 2, viewRect.height >= 2 else { return nil }
+        let local = viewRect.offsetBy(dx: -selectionOrigin.x, dy: -selectionOrigin.y)
+        // 形状点相对 sel.logicalRect；selectionOrigin 可能经 pixelAlign 微调，用 appliedSelection 原点更稳
+        let logicalLocal: CGRect
+        if let sel = appliedSelection {
+            let viewSel = convertFromGlobal(sel.logicalRect)
+            logicalLocal = viewRect.offsetBy(dx: -viewSel.minX, dy: -viewSel.minY)
+        } else {
+            logicalLocal = local
+        }
+        let pixelRect = CGRect(
+            x: logicalLocal.minX * scaleX,
+            y: logicalLocal.minY * scaleY,
+            width: logicalLocal.width * scaleX,
+            height: logicalLocal.height * scaleY
+        )
+        let block = max(8, Int((8 * max(scaleX, scaleY)).rounded()))
+        guard let patch = AnnotationController.filteredPatch(
+            kind: kind,
+            rectInBottomLeftPixels: pixelRect,
+            base: selectionBase,
+            mosaicBlock: CGFloat(block)
+        ) else { return nil }
+
+        let content = CALayer()
+        content.frame = viewRect
+        content.contents = patch
+        content.contentsGravity = .resize
+        content.contentsScale = 1
+        content.minificationFilter = .nearest
+        content.magnificationFilter = .nearest
+        return content
     }
 
     private func convertFromGlobal(_ rect: CGRect) -> CGRect {
