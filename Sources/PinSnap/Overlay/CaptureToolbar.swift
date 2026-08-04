@@ -323,7 +323,8 @@ final class CaptureToolbar: NSPanel {
         } else {
             pendingFramePreserveTop = preserveTop
         }
-        Task { @MainActor [weak self] in
+        // main.async 明确排到本轮 layout 之后；Task 有时仍会落在同一 layout pass
+        DispatchQueue.main.async { [weak self] in
             guard let self, let preserve = self.pendingFramePreserveTop else { return }
             self.pendingFramePreserveTop = nil
             guard !self.isApplyingFrame else { return }
