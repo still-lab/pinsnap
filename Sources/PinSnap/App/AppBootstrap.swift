@@ -39,9 +39,20 @@ public final class AppBootstrap {
         hotKeys.onAction = { [weak self] action in
             guard let self, !self.hotKeysDisabled else { return }
             switch action {
-            case .capture: self.coordinator.beginCapture()
-            case .paste: self.coordinator.beginPasteFromClipboard()
-            case .togglePins: self.coordinator.togglePinVisibility()
+            case .capture:
+                self.coordinator.beginCapture()
+            case .captureLastRegion:
+                if self.coordinator.hasLastSelection {
+                    self.coordinator.beginCaptureLastRegion()
+                } else {
+                    self.coordinator.beginCapture()
+                }
+            case .paste:
+                self.coordinator.beginPasteFromClipboard()
+            case .hidePins:
+                self.coordinator.hideAllPins()
+            case .showPins:
+                self.coordinator.showAllPins()
             }
         }
         applyHotKeyRegistration()

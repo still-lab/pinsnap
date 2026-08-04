@@ -34,7 +34,7 @@ Settings → Purchase, Support
 ### App
 
 - `SessionCoordinator`：驱动截图状态机；组装出口。
-- `HotKeyCenter`：注册/冲突检测 ⌃⇧A/V/H。
+- `HotKeyCenter`：注册/冲突检测 F1 / F1×2 / F3 / ⌘H / ⌘⇧H。
 - `ScreenPermission`：TCC 状态检测与系统设置深链（无自定义引导窗）。
 
 ### Capture

@@ -149,6 +149,14 @@ public final class SessionCoordinator {
         pins.toggleVisibility()
     }
 
+    public func hideAllPins() {
+        pins.hideAll()
+    }
+
+    public func showAllPins() {
+        pins.showAll()
+    }
+
     private func cancelDelay() {
         guard delayTask != nil else { return }
         delayTask?.cancel()

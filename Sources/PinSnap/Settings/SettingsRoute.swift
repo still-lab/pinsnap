@@ -39,9 +39,11 @@ public struct SettingsRootView: View {
                     }
                 case .hotkeys:
                     Form {
-                        LabeledContent("截图", value: "⌃⇧A")
-                        LabeledContent("贴图", value: "⌃⇧V")
-                        LabeledContent("显隐贴图", value: "⌃⇧H")
+                        LabeledContent("截图", value: "F1")
+                        LabeledContent("上次区域", value: "F1×2")
+                        LabeledContent("贴图", value: "F3")
+                        LabeledContent("隐藏贴图", value: "⌘H")
+                        LabeledContent("显示贴图", value: "⌘⇧H")
                         LabeledContent("取色复制", value: "C")
                         LabeledContent("取色切换", value: "Tab")
                         LabeledContent("选区微调", value: "←↑↓→")

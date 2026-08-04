@@ -9,7 +9,7 @@
 - [x] 用 Xcode 创建 macOS App（Bundle `app.pinsnap.macos`，macOS 13，Universal）
 - [x] 启用 App Sandbox；无多余 entitlement
 - [x] MenuBarExtra / 状态栏图标
-- [x] HotKeyCenter 注册 ⌃⇧A/V/H（先打日志）
+- [x] HotKeyCenter 注册 F1 / F1×2 / F3 / ⌘H / ⌘⇧H
 - [x] 无权限时深链系统设置（**不做**自定义引导窗）
 - [x] Settings 空壳（SwiftUI）
 - [x] 把 `Sources/PinSnap/*` 接口文件纳入 target
@@ -34,7 +34,7 @@
 - [x] Undo/Redo
 - [x] PinPanel：置顶、拖动、滚轮缩放、透明度
 - [x] 截图 → 贴图出口
-- [x] 剪贴板图像 → 贴图（⌃⇧V）
+- [x] 剪贴板图像 → 贴图（F3）
 - [x] Free：第 4 张拦截 + 升级占位 UI
 
 **验收：** 截→标→贴主路径；A-01–03；P-01/02/04。
@@ -45,7 +45,7 @@
 - [x] 关闭 / 销毁 / 隐藏全部（代码；生命周期表手工验收待勾）
 - [x] **砍掉**：会话持久化与崩溃恢复
 - [x] 剪贴板：文本渲染、色卡（代码；建议再验）
-- [x] 延时、上次区域（状态栏菜单；延时固定 5s；热键暂缓）
+- [x] 延时、上次区域（状态栏菜单；延时固定 5s；上次区域另支持 F1 连击）
 - [ ] FeatureGate 接真实 StoreKit（Sandbox）
 - [ ] 其余 P1：放大镜/取色/像素微调/自动保存/旋转镜像/缩略图/贴图标注等
 
