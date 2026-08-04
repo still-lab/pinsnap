@@ -189,21 +189,15 @@ public final class AnnotationController: AnnotationControlling {
     public func exportFlattened(base: CGImage) -> CGImage? {
         let w = base.width
         let h = base.height
+        guard let annotations = Self.renderAnnotationOverlay(
+            shapes: document.shapes,
+            pixelWidth: w,
+            pixelHeight: h,
+            base: base
+        ) else { return base }
+
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
-        // 标注单独成层，橡皮 destinationOut 只擦标注不擦底图
-        guard let annCtx = CGContext(
-            data: nil, width: w, height: h,
-            bitsPerComponent: 8, bytesPerRow: 0,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo
-        ) else { return base }
-        annCtx.clear(CGRect(x: 0, y: 0, width: w, height: h))
-        for shape in document.shapes {
-            draw(shape, in: annCtx, canvasHeight: CGFloat(h), base: base)
-        }
-        guard let annotations = annCtx.makeImage() else { return base }
-
         guard let ctx = CGContext(
             data: nil, width: w, height: h,
             bitsPerComponent: 8, bytesPerRow: 0,
@@ -215,7 +209,34 @@ public final class AnnotationController: AnnotationControlling {
         return ctx.makeImage() ?? base
     }
 
-    private func draw(_ shape: Shape, in ctx: CGContext, canvasHeight: CGFloat, base: CGImage) {
+    /// 仅标注层（含橡皮 destinationOut）。坐标为像素、原点左下。
+    public static func renderAnnotationOverlay(
+        shapes: [Shape],
+        pixelWidth: Int,
+        pixelHeight: Int,
+        base: CGImage?
+    ) -> CGImage? {
+        guard pixelWidth > 0, pixelHeight > 0, !shapes.isEmpty else { return nil }
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        guard let annCtx = CGContext(
+            data: nil, width: pixelWidth, height: pixelHeight,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else { return nil }
+        annCtx.clear(CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight))
+        for shape in shapes {
+            drawStatic(shape, in: annCtx, canvasHeight: CGFloat(pixelHeight), base: base)
+        }
+        return annCtx.makeImage()
+    }
+
+    private func draw(_ shape: Shape, in ctx: CGContext, canvasHeight: CGFloat, base: CGImage?) {
+        Self.drawStatic(shape, in: ctx, canvasHeight: canvasHeight, base: base)
+    }
+
+    private static func drawStatic(_ shape: Shape, in ctx: CGContext, canvasHeight: CGFloat, base: CGImage?) {
         let color = shape.nsColor.cgColor
         ctx.setStrokeColor(color)
         ctx.setFillColor(color)
@@ -240,7 +261,7 @@ public final class AnnotationController: AnnotationControlling {
             ctx.addLine(to: last)
             ctx.strokePath()
             if shape.kind == .arrow {
-                drawArrowHead(from: first, to: last, in: ctx)
+                Self.drawArrowHead(from: first, to: last, in: ctx)
             }
         case .freehand, .marker:
             ctx.setStrokeColor(color)
@@ -250,12 +271,13 @@ public final class AnnotationController: AnnotationControlling {
             for p in pts.dropFirst() { ctx.addLine(to: p) }
             ctx.strokePath()
         case .eraser:
+            // 只擦标注层像素；需不透明 stroke 才有 destinationOut 效果
             ctx.saveGState()
             ctx.setBlendMode(.destinationOut)
-            ctx.setStrokeColor(NSColor.black.cgColor)
+            ctx.setStrokeColor(red: 0, green: 0, blue: 0, alpha: 1)
             ctx.setLineCap(.round)
             ctx.setLineJoin(.round)
-            ctx.setLineWidth(shape.lineWidth)
+            ctx.setLineWidth(max(1, shape.lineWidth))
             ctx.move(to: first)
             for p in pts.dropFirst() { ctx.addLine(to: p) }
             ctx.strokePath()
@@ -273,7 +295,7 @@ public final class AnnotationController: AnnotationControlling {
             let size = AnnotationController.textSize(text: text, fontSize: fontSize)
             ctx.draw(cg, in: CGRect(origin: first, size: size))
         case .mosaic, .blur:
-            guard let last = pts.last else { return }
+            guard let base, let last = pts.last else { return }
             let r = CGRect(x: min(first.x, last.x), y: min(first.y, last.y),
                            width: abs(last.x - first.x), height: abs(last.y - first.y)).integral
             guard let patch = Self.filteredPatch(kind: shape.kind, rectInBottomLeftPixels: r, base: base) else { return }
@@ -303,7 +325,7 @@ public final class AnnotationController: AnnotationControlling {
         }
     }
 
-    private func drawArrowHead(from: CGPoint, to: CGPoint, in ctx: CGContext) {
+    private static func drawArrowHead(from: CGPoint, to: CGPoint, in ctx: CGContext) {
         let angle = atan2(to.y - from.y, to.x - from.x)
         let len: CGFloat = 12
         let a1 = angle + .pi * 0.8

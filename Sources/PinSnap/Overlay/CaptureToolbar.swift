@@ -199,7 +199,7 @@ final class CaptureToolbar: NSPanel {
         penModeButton.action = #selector(penStyleAction(_:))
         markerModeButton = iconBtn("highlighter", tip: "记号笔", tag: 121)
         markerModeButton.action = #selector(penStyleAction(_:))
-        eraserModeButton = iconBtn("pencil.slash", tip: "橡皮", tag: 122)
+        eraserModeButton = iconBtn("eraser.fill", tip: "橡皮", tag: 122)
         eraserModeButton.action = #selector(penStyleAction(_:))
         penSubStack.addArrangedSubview(penModeButton)
         penSubStack.addArrangedSubview(markerModeButton)

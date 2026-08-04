@@ -1484,6 +1484,15 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
 
     private func renderAnnotations(shapes: [Shape], draft: Shape?, in selectionLocal: CGRect) {
         annotationLayer.sublayers = nil
+        annotationLayer.contents = nil
+        annotationLayer.compositingFilter = nil
+
+        let all = shapes + (draft.map { [$0] } ?? [])
+        guard !all.isEmpty else {
+            annotationLayer.frame = bounds
+            return
+        }
+
         let selectionBase = selectionPixelImage()
         let scaleX: CGFloat
         let scaleY: CGFloat
@@ -1495,7 +1504,34 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
             scaleX = s
             scaleY = s
         }
-        let all = shapes + (draft.map { [$0] } ?? [])
+
+        // 有橡皮时 CAShapeLayer + destinationOut 不可靠，统一走与导出相同的标注位图。
+        let needsBitmap = all.contains { $0.kind == .eraser || $0.kind == .mosaic || $0.kind == .blur }
+        if needsBitmap {
+            var pixelShapes: [Shape] = []
+            let scale = max(scaleX, scaleY)
+            for shape in all {
+                var s = shape
+                s.points = shape.points.map { CGPoint(x: $0.x * scaleX, y: $0.y * scaleY) }
+                s.lineWidth = shape.lineWidth * scale
+                pixelShapes.append(s)
+            }
+            let pw = max(1, Int(ceil(selectionLocal.width * scaleX)))
+            let ph = max(1, Int(ceil(selectionLocal.height * scaleY)))
+            if let overlay = AnnotationController.renderAnnotationOverlay(
+                shapes: pixelShapes,
+                pixelWidth: pw,
+                pixelHeight: ph,
+                base: selectionBase
+            ) {
+                annotationLayer.frame = selectionLocal
+                annotationLayer.contents = NSImage(cgImage: overlay, size: selectionLocal.size)
+                annotationLayer.contentsGravity = .resize
+                return
+            }
+        }
+
+        annotationLayer.frame = bounds
         for shape in all {
             guard let shapeLayer = makeShapeLayer(
                 shape,
@@ -1557,7 +1593,7 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
             let r = CGRect(x: min(first.x, last.x), y: min(first.y, last.y),
                            width: abs(last.x - first.x), height: abs(last.y - first.y))
             layer.path = CGPath(ellipseIn: r, transform: nil)
-        case .line, .arrow, .freehand, .marker, .eraser:
+        case .line, .arrow, .freehand, .marker:
             let path = CGMutablePath()
             path.move(to: first)
             for p in pts.dropFirst() { path.addLine(to: p) }
@@ -1570,10 +1606,9 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
                 path.addLine(to: CGPoint(x: last.x + cos(angle - .pi * 0.8) * len, y: last.y + sin(angle - .pi * 0.8) * len))
             }
             layer.path = path
-            if shape.kind == .eraser {
-                layer.strokeColor = NSColor.black.cgColor
-                layer.compositingFilter = "destinationOutBlendMode"
-            }
+        case .eraser:
+            // 预览走位图路径；此处不应到达
+            return nil
         case .highlight:
             guard let last = pts.last else { return nil }
             let r = CGRect(x: min(first.x, last.x), y: min(first.y, last.y),
