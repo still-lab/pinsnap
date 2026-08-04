@@ -179,16 +179,17 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.autoenablesItems = false
         menu.delegate = self
 
-        menu.addItem(actionItem("截图", #selector(capture)))
+        menu.addItem(actionItem("截图", #selector(capture), shortcut: "F1"))
         menu.addItem(actionItem("延时截图", #selector(captureDelayed)))
-        let lastRegion = actionItem("上次区域", #selector(captureLastRegion))
+        let lastRegion = actionItem("上次区域", #selector(captureLastRegion), shortcut: "F1×2")
         lastRegion.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
         menu.addItem(lastRegion)
         menu.addItem(actionItem("截图并复制", #selector(captureAutoCopy)))
         menu.addItem(.separator())
 
-        menu.addItem(actionItem("贴图", #selector(paste)))
-        menu.addItem(actionItem("隐藏/显示贴图", #selector(togglePins)))
+        menu.addItem(actionItem("贴图", #selector(paste), shortcut: "F3"))
+        menu.addItem(actionItem("隐藏贴图", #selector(hidePins), shortcut: "⌘H"))
+        menu.addItem(actionItem("显示贴图", #selector(showPins), shortcut: "⌘⇧H"))
         menu.addItem(.separator())
 
         let disableHotKeys = NSMenuItem(
@@ -224,11 +225,43 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshStatusMenu(menu)
     }
 
-    private func actionItem(_ title: String, _ selector: Selector) -> NSMenuItem {
+    /// `shortcut` 一律走同一套右侧文案（非系统键位解析），保证字号与样式一致；全局仍由 HotKeyCenter 触发。
+    private func actionItem(
+        _ title: String,
+        _ selector: Selector,
+        shortcut: String? = nil
+    ) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
         item.target = self
         item.isEnabled = true
+        if let shortcut {
+            item.attributedTitle = Self.menuLabeledTitle(title, shortcut: shortcut)
+        }
         return item
+    }
+
+    private static func menuLabeledTitle(_ title: String, shortcut: String) -> NSAttributedString {
+        let font = NSFont.menuFont(ofSize: 0)
+        let color = NSColor.labelColor
+        let shortcutColor = NSColor.secondaryLabelColor
+
+        // 右对齐制表位：左侧标题、右侧快捷键同一字号
+        let style = NSMutableParagraphStyle()
+        style.tabStops = [NSTextTab(textAlignment: .right, location: 168, options: [:])]
+        style.lineBreakMode = .byClipping
+
+        let text = "\(title)\t\(shortcut)"
+        let result = NSMutableAttributedString(string: text, attributes: [
+            .font: font,
+            .foregroundColor: color,
+            .paragraphStyle: style,
+        ])
+        let shortcutRange = NSRange(location: (title as NSString).length + 1, length: (shortcut as NSString).length)
+        result.addAttributes([
+            .font: font,
+            .foregroundColor: shortcutColor,
+        ], range: shortcutRange)
+        return result
     }
 
     @objc private func capture() {
@@ -261,6 +294,14 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func togglePins() {
         AppBootstrap.shared.coordinator.togglePinVisibility()
+    }
+
+    @objc private func hidePins() {
+        AppBootstrap.shared.coordinator.hideAllPins()
+    }
+
+    @objc private func showPins() {
+        AppBootstrap.shared.coordinator.showAllPins()
     }
 
     @objc private func toggleDisableHotKeys(_ sender: NSMenuItem) {
