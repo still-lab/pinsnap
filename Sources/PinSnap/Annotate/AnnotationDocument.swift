@@ -4,7 +4,7 @@ import CoreImage
 import Foundation
 
 public enum ShapeKind: String, Codable, Sendable {
-    case rect, ellipse, line, arrow, freehand, text, mosaic, blur, number, highlight
+    case rect, ellipse, line, arrow, freehand, marker, eraser, text, mosaic, blur, number, highlight
 }
 
 public struct Shape: Identifiable, Codable, Sendable {
@@ -190,18 +190,28 @@ public final class AnnotationController: AnnotationControlling {
         let w = base.width
         let h = base.height
         let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        // 标注单独成层，橡皮 destinationOut 只擦标注不擦底图
+        guard let annCtx = CGContext(
+            data: nil, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else { return base }
+        annCtx.clear(CGRect(x: 0, y: 0, width: w, height: h))
+        for shape in document.shapes {
+            draw(shape, in: annCtx, canvasHeight: CGFloat(h), base: base)
+        }
+        guard let annotations = annCtx.makeImage() else { return base }
+
         guard let ctx = CGContext(
             data: nil, width: w, height: h,
             bitsPerComponent: 8, bytesPerRow: 0,
             space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            bitmapInfo: bitmapInfo
         ) else { return base }
-
         ctx.draw(base, in: CGRect(x: 0, y: 0, width: w, height: h))
-
-        for shape in document.shapes {
-            draw(shape, in: ctx, canvasHeight: CGFloat(h), base: base)
-        }
+        ctx.draw(annotations, in: CGRect(x: 0, y: 0, width: w, height: h))
         return ctx.makeImage() ?? base
     }
 
@@ -232,10 +242,24 @@ public final class AnnotationController: AnnotationControlling {
             if shape.kind == .arrow {
                 drawArrowHead(from: first, to: last, in: ctx)
             }
-        case .freehand:
+        case .freehand, .marker:
+            ctx.setStrokeColor(color)
+            ctx.setLineCap(.round)
+            ctx.setLineJoin(.round)
             ctx.move(to: first)
             for p in pts.dropFirst() { ctx.addLine(to: p) }
             ctx.strokePath()
+        case .eraser:
+            ctx.saveGState()
+            ctx.setBlendMode(.destinationOut)
+            ctx.setStrokeColor(NSColor.black.cgColor)
+            ctx.setLineCap(.round)
+            ctx.setLineJoin(.round)
+            ctx.setLineWidth(shape.lineWidth)
+            ctx.move(to: first)
+            for p in pts.dropFirst() { ctx.addLine(to: p) }
+            ctx.strokePath()
+            ctx.restoreGState()
         case .text:
             let text = shape.text ?? ""
             guard !text.isEmpty else { return }

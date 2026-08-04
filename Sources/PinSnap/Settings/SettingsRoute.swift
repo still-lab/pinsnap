@@ -19,6 +19,7 @@ public struct SettingsRootView: View {
     @State private var route: SettingsRoute = .general
     @State private var launchAtLogin = false
     @State private var cancelOnActivate = false
+    @AppStorage(ColorValueFormat.defaultsKey) private var colorFormat = ColorValueFormat.hex.rawValue
     @AppStorage("pinsnap.filenameTemplate") private var template = FilenameTemplate.default.pattern
 
     public init() {}
@@ -35,6 +36,10 @@ public struct SettingsRootView: View {
                     Form {
                         Toggle("开机启动", isOn: $launchAtLogin)
                         Toggle("外部激活取消截图", isOn: $cancelOnActivate)
+                        Picker("取色格式", selection: $colorFormat) {
+                            Text("HEX").tag(ColorValueFormat.hex.rawValue)
+                            Text("RGB").tag(ColorValueFormat.rgb.rawValue)
+                        }
                     }
                 case .hotkeys:
                     Form {

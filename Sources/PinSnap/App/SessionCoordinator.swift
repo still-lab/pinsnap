@@ -5,6 +5,9 @@ import Foundation
 /// 截图会话编排。
 @MainActor
 public final class SessionCoordinator {
+    /// REQ: C-11 — 延时秒数固定，菜单入口，不可配置。
+    public static let delayCaptureSeconds: TimeInterval = 5
+
     public private(set) var state: CaptureSessionState = .idle
 
     private let capture: CaptureServiceProtocol
@@ -13,11 +16,15 @@ public final class SessionCoordinator {
     private let gate: FeatureGateProtocol
     private let clipboard = ClipboardBridge()
     private let overlay = CaptureOverlayController()
-    private var lastSelectionImage: CGImage?
+    /// 成功截图后的上次选区（内存）。REQ: C-10 / D-067
+    private var lastSelection: CaptureSelection?
+    private var delayTask: Task<Void, Never>?
     /// 本进程最多打开一次系统设置，避免刷屏。
     private var didOpenScreenSettingsThisProcess = false
 
     public var onFreeLimit: (() -> Void)?
+
+    public var hasLastSelection: Bool { lastSelection != nil }
 
     public init(
         capture: CaptureServiceProtocol,
@@ -38,10 +45,36 @@ public final class SessionCoordinator {
     }
 
     public func beginCapture(autoCopy: Bool = false) {
-        Task { await beginCaptureAsync(autoCopy: autoCopy) }
+        cancelDelay()
+        Task { await beginCaptureAsync(autoCopy: autoCopy, initialSelection: nil) }
     }
 
-    public func beginCaptureAsync(autoCopy: Bool = false) async {
+    /// REQ: C-11 — 固定延时后进入普通截图。
+    public func beginDelayedCapture(autoCopy: Bool = false) {
+        cancelDelay()
+        guard state == .idle || state == .preparing else { return }
+        state = .preparing
+        let seconds = Self.delayCaptureSeconds
+        delayTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard !Task.isCancelled, self.state == .preparing else { return }
+            self.delayTask = nil
+            await self.beginCaptureAsync(autoCopy: autoCopy, initialSelection: nil)
+        }
+    }
+
+    /// REQ: C-10 — 用内存中上次成功选区直接锁定选区。
+    public func beginCaptureLastRegion(autoCopy: Bool = false) {
+        cancelDelay()
+        guard let lastSelection else { return }
+        Task { await beginCaptureAsync(autoCopy: autoCopy, initialSelection: lastSelection) }
+    }
+
+    public func beginCaptureAsync(
+        autoCopy: Bool = false,
+        initialSelection: CaptureSelection? = nil
+    ) async {
         guard state == .idle || state == .preparing else { return }
         state = .preparing
 
@@ -60,7 +93,7 @@ public final class SessionCoordinator {
             state = .capturing
             let frames = try await capture.captureStillFrames()
             overlay.autoCopyOnSelect = autoCopy
-            overlay.present(frames: frames)
+            overlay.present(frames: frames, initialSelection: initialSelection)
         } catch CaptureError.permissionDenied {
             state = .idle
             PinSnapLog.capture.error("capture permissionDenied")
@@ -71,7 +104,7 @@ public final class SessionCoordinator {
     }
 
     public func clearCaptureHistory() {
-        lastSelectionImage = nil
+        lastSelection = nil
         Toast.shared.show("已清空")
     }
 
@@ -106,19 +139,28 @@ public final class SessionCoordinator {
         pins.toggleVisibility()
     }
 
+    private func cancelDelay() {
+        guard delayTask != nil else { return }
+        delayTask?.cancel()
+        delayTask = nil
+        if state == .preparing {
+            state = .idle
+        }
+    }
+
     private func handleOverlay(_ outcome: CaptureOverlayOutcome) {
         state = .committing
         switch outcome {
         case .cancelled:
             break
-        case .copied(let image):
-            lastSelectionImage = image
+        case .copied(_, let selection):
+            lastSelection = selection
             Toast.shared.show("已复制")
-        case .saved(let image):
-            lastSelectionImage = image
+        case .saved(_, let selection):
+            lastSelection = selection
             Toast.shared.show("已保存")
-        case .pinned(let image, let frame):
-            lastSelectionImage = image
+        case .pinned(let image, let frame, let selection):
+            lastSelection = selection
             do {
                 _ = try pins.create(image: image, at: frame)
                 Toast.shared.show("已贴图")

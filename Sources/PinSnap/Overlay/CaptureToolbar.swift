@@ -34,12 +34,20 @@ enum CaptureMosaicStyle: Int {
     case blur
 }
 
+enum CapturePenStyle: Int {
+    case pen
+    case marker
+    case eraser
+}
+
 @MainActor
 protocol CaptureToolbarDelegate: AnyObject {
     func toolbarSelectTool(_ tool: CaptureAnnotateTool?)
     func toolbarSelectShapeStyle(_ style: CaptureShapeStyle)
     func toolbarSelectArrowStyle(_ style: CaptureArrowStyle)
     func toolbarSelectMosaicStyle(_ style: CaptureMosaicStyle)
+    func toolbarSelectPenStyle(_ style: CapturePenStyle)
+    func toolbarToggleEyedropper()
     func toolbarUndo()
     func toolbarRedo()
     func toolbarOCR()
@@ -58,7 +66,7 @@ final class CaptureToolbar: NSPanel {
     private let rowHeight: CGFloat = 40
     private let sidePad: CGFloat = 10
     private let gap: CGFloat = 8
-    private let barWidth: CGFloat = 490
+    private let barWidth: CGFloat = 528
     private let subRowExtra: CGFloat = 34
     private let dividerHeight: CGFloat = 1
     /// 工具条与选区之间的间距
@@ -68,6 +76,8 @@ final class CaptureToolbar: NSPanel {
     private var shapeStyle: CaptureShapeStyle = .rect
     private var arrowStyle: CaptureArrowStyle = .arrow
     private var mosaicStyle: CaptureMosaicStyle = .mosaic
+    private var penStyle: CapturePenStyle = .pen
+    private var eyedropperOn = false
 
     private let rootStack = NSStackView()
     private let row1 = NSStackView()
@@ -76,20 +86,25 @@ final class CaptureToolbar: NSPanel {
 
     private let shapeSubStack = NSStackView()
     private let arrowSubStack = NSStackView()
+    private let penSubStack = NSStackView()
     private let mosaicSubStack = NSStackView()
     private var rectButton: NSButton!
     private var ellipseButton: NSButton!
     private var lineModeButton: NSButton!
     private var arrowModeButton: NSButton!
+    private var penModeButton: NSButton!
+    private var markerModeButton: NSButton!
+    private var eraserModeButton: NSButton!
     private var mosaicModeButton: NSButton!
     private var blurModeButton: NSButton!
+    private var eyedropperButton: NSButton!
     private var rowDivider: NSView!
     private var pendingFramePreserveTop: Bool?
     private var isApplyingFrame = false
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 490, height: rowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: 528, height: rowHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -154,6 +169,9 @@ final class CaptureToolbar: NSPanel {
         row1.addArrangedSubview(actionBtn("arrow.uturn.backward", tip: "撤销", #selector(undoAction)))
         row1.addArrangedSubview(actionBtn("arrow.uturn.forward", tip: "重做", #selector(redoAction)))
         row1.addArrangedSubview(sep())
+        eyedropperButton = actionBtn("eyedropper", tip: "取色", #selector(eyedropperAction))
+        eyedropperButton.setButtonType(.toggle)
+        row1.addArrangedSubview(eyedropperButton)
         row1.addArrangedSubview(actionBtn("doc.text.magnifyingglass", tip: "OCR", #selector(ocrAction)))
         row1.addArrangedSubview(actionBtn("doc.on.doc", tip: "复制", #selector(copyAction)))
         row1.addArrangedSubview(actionBtn("square.and.arrow.down", tip: "保存", #selector(saveAction)))
@@ -176,6 +194,17 @@ final class CaptureToolbar: NSPanel {
         arrowSubStack.addArrangedSubview(lineModeButton)
         arrowSubStack.addArrangedSubview(arrowModeButton)
 
+        configureSubStack(penSubStack)
+        penModeButton = iconBtn("pencil.tip", tip: "画笔", tag: 120)
+        penModeButton.action = #selector(penStyleAction(_:))
+        markerModeButton = iconBtn("highlighter", tip: "记号笔", tag: 121)
+        markerModeButton.action = #selector(penStyleAction(_:))
+        eraserModeButton = iconBtn("pencil.slash", tip: "橡皮", tag: 122)
+        eraserModeButton.action = #selector(penStyleAction(_:))
+        penSubStack.addArrangedSubview(penModeButton)
+        penSubStack.addArrangedSubview(markerModeButton)
+        penSubStack.addArrangedSubview(eraserModeButton)
+
         configureSubStack(mosaicSubStack)
         mosaicModeButton = iconBtn("square.grid.2x2.fill", tip: "马赛克", tag: 200)
         mosaicModeButton.action = #selector(mosaicStyleAction(_:))
@@ -186,9 +215,11 @@ final class CaptureToolbar: NSPanel {
 
         row2.addArrangedSubview(shapeSubStack)
         row2.addArrangedSubview(arrowSubStack)
+        row2.addArrangedSubview(penSubStack)
         row2.addArrangedSubview(mosaicSubStack)
         shapeSubStack.isHidden = true
         arrowSubStack.isHidden = true
+        penSubStack.isHidden = true
         mosaicSubStack.isHidden = true
         row2.isHidden = true
 
@@ -240,6 +271,16 @@ final class CaptureToolbar: NSPanel {
         refreshSelectionUI()
     }
 
+    func setPenStyle(_ style: CapturePenStyle) {
+        penStyle = style
+        refreshSelectionUI()
+    }
+
+    func setEyedropperOn(_ on: Bool) {
+        eyedropperOn = on
+        refreshSelectionUI()
+    }
+
     func place(under selection: CGRect, inScreenBounds screen: CGRect, bringToFront: Bool = true) {
         let h = height
         let w = barWidth
@@ -282,7 +323,7 @@ final class CaptureToolbar: NSPanel {
         } else {
             pendingFramePreserveTop = preserveTop
         }
-        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self, let preserve = self.pendingFramePreserveTop else { return }
             self.pendingFramePreserveTop = nil
             guard !self.isApplyingFrame else { return }
@@ -312,12 +353,14 @@ final class CaptureToolbar: NSPanel {
 
         let showShape = selectedTool == .shape
         let showArrow = selectedTool == .arrow
+        let showPen = selectedTool == .pen
         let showMosaic = selectedTool == .mosaic
-        let showSub = showShape || showArrow || showMosaic
+        let showSub = showShape || showArrow || showPen || showMosaic
 
         // 只用 isHidden，不在 layout 中增删 arrangedSubview
         shapeSubStack.isHidden = !showShape
         arrowSubStack.isHidden = !showArrow
+        penSubStack.isHidden = !showPen
         mosaicSubStack.isHidden = !showMosaic
         row2.isHidden = !showSub
         rowDivider.isHidden = !showSub
@@ -332,10 +375,20 @@ final class CaptureToolbar: NSPanel {
         lineModeButton.contentTintColor = arrowStyle == .line ? .controlAccentColor : idle
         arrowModeButton.contentTintColor = arrowStyle == .arrow ? .controlAccentColor : idle
 
+        penModeButton.state = penStyle == .pen ? .on : .off
+        markerModeButton.state = penStyle == .marker ? .on : .off
+        eraserModeButton.state = penStyle == .eraser ? .on : .off
+        penModeButton.contentTintColor = penStyle == .pen ? .controlAccentColor : idle
+        markerModeButton.contentTintColor = penStyle == .marker ? .controlAccentColor : idle
+        eraserModeButton.contentTintColor = penStyle == .eraser ? .controlAccentColor : idle
+
         mosaicModeButton.state = mosaicStyle == .mosaic ? .on : .off
         blurModeButton.state = mosaicStyle == .blur ? .on : .off
         mosaicModeButton.contentTintColor = mosaicStyle == .mosaic ? .controlAccentColor : idle
         blurModeButton.contentTintColor = mosaicStyle == .blur ? .controlAccentColor : idle
+
+        eyedropperButton.state = eyedropperOn ? .on : .off
+        eyedropperButton.contentTintColor = eyedropperOn ? .controlAccentColor : idle
 
         if resizeWindow {
             scheduleApplyFrame(preserveTop: true)
@@ -413,6 +466,7 @@ final class CaptureToolbar: NSPanel {
 
     @objc private func toolAction(_ sender: NSButton) {
         guard let tool = CaptureAnnotateTool(rawValue: sender.tag) else { return }
+        eyedropperOn = false
         if selectedTool == tool {
             selectedTool = nil
             actionHandler?.toolbarSelectTool(nil)
@@ -423,6 +477,8 @@ final class CaptureToolbar: NSPanel {
                 actionHandler?.toolbarSelectShapeStyle(shapeStyle)
             } else if tool == .arrow {
                 actionHandler?.toolbarSelectArrowStyle(arrowStyle)
+            } else if tool == .pen {
+                actionHandler?.toolbarSelectPenStyle(penStyle)
             } else if tool == .mosaic {
                 actionHandler?.toolbarSelectMosaicStyle(mosaicStyle)
             }
@@ -432,6 +488,7 @@ final class CaptureToolbar: NSPanel {
 
     @objc private func shapeStyleAction(_ sender: NSButton) {
         shapeStyle = sender.tag == 101 ? .ellipse : .rect
+        eyedropperOn = false
         selectedTool = .shape
         actionHandler?.toolbarSelectTool(.shape)
         actionHandler?.toolbarSelectShapeStyle(shapeStyle)
@@ -440,6 +497,7 @@ final class CaptureToolbar: NSPanel {
 
     @objc private func arrowStyleAction(_ sender: NSButton) {
         arrowStyle = sender.tag == 110 ? .line : .arrow
+        eyedropperOn = false
         selectedTool = .arrow
         actionHandler?.toolbarSelectTool(.arrow)
         actionHandler?.toolbarSelectArrowStyle(arrowStyle)
@@ -448,10 +506,28 @@ final class CaptureToolbar: NSPanel {
 
     @objc private func mosaicStyleAction(_ sender: NSButton) {
         mosaicStyle = sender.tag == 201 ? .blur : .mosaic
+        eyedropperOn = false
         selectedTool = .mosaic
         actionHandler?.toolbarSelectTool(.mosaic)
         actionHandler?.toolbarSelectMosaicStyle(mosaicStyle)
         refreshSelectionUI()
+    }
+
+    @objc private func penStyleAction(_ sender: NSButton) {
+        switch sender.tag {
+        case 121: penStyle = .marker
+        case 122: penStyle = .eraser
+        default: penStyle = .pen
+        }
+        eyedropperOn = false
+        selectedTool = .pen
+        actionHandler?.toolbarSelectTool(.pen)
+        actionHandler?.toolbarSelectPenStyle(penStyle)
+        refreshSelectionUI()
+    }
+
+    @objc private func eyedropperAction() {
+        actionHandler?.toolbarToggleEyedropper()
     }
 
     @objc private func undoAction() { actionHandler?.toolbarUndo() }

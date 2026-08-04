@@ -4,7 +4,7 @@ import SwiftUI
 
 @main
 @MainActor
-final class PinSnapApp: NSObject, NSApplicationDelegate {
+final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var upgradeWindow: NSWindow?
@@ -55,11 +55,16 @@ final class PinSnapApp: NSObject, NSApplicationDelegate {
     private func buildStatusMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
+        menu.delegate = self
 
         menu.addItem(actionItem("偏好设置", #selector(openSettings)))
         menu.addItem(.separator())
 
         menu.addItem(actionItem("截图", #selector(capture)))
+        menu.addItem(actionItem("延时截图", #selector(captureDelayed)))
+        let lastRegion = actionItem("上次区域截图", #selector(captureLastRegion))
+        lastRegion.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
+        menu.addItem(lastRegion)
         menu.addItem(actionItem("截图并自动复制", #selector(captureAutoCopy)))
         menu.addItem(actionItem("从剪切板贴图", #selector(paste)))
         menu.addItem(actionItem("隐藏/显示所有贴图", #selector(togglePins)))
@@ -87,6 +92,12 @@ final class PinSnapApp: NSObject, NSApplicationDelegate {
         return menu
     }
 
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        for item in menu.items where item.action == #selector(captureLastRegion) {
+            item.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
+        }
+    }
+
     private func actionItem(_ title: String, _ selector: Selector) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
         item.target = self
@@ -98,6 +109,18 @@ final class PinSnapApp: NSObject, NSApplicationDelegate {
         // 等菜单收起后再截帧，避免菜单残影 / 抢焦点导致遮罩收不到拖拽
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             AppBootstrap.shared.coordinator.beginCapture(autoCopy: false)
+        }
+    }
+
+    @objc private func captureDelayed() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            AppBootstrap.shared.coordinator.beginDelayedCapture(autoCopy: false)
+        }
+    }
+
+    @objc private func captureLastRegion() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            AppBootstrap.shared.coordinator.beginCaptureLastRegion(autoCopy: false)
         }
     }
 

@@ -45,7 +45,7 @@ Tests/PinSnapTests/
 docs/
 ```
 
-当前仓库以 **代码规划 + 接口骨架** 为主；Xcode 工程在 M0 创建（见 `docs/MILESTONES.md`）。
+可运行 macOS App（`xcodegen` / `xcodebuild`）。**M0–M2 完成，M3 进行中**；进度见 [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)。
 
 ## 商业（已锁定）
 

@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import XCTest
 @testable import PinSnapKit
@@ -124,6 +125,14 @@ final class AnnotationUndoTests: XCTestCase {
             return XCTFail("pixelateNearest")
         }
         XCTAssertEqual(pixellated.width, 64)
+    }
+}
+
+final class ColorValueFormatTests: XCTestCase {
+    func testHexAndRGBFormatting() {
+        let color = NSColor(srgbRed: 1, green: 0.5, blue: 0, alpha: 1)
+        XCTAssertEqual(ColorValueFormat.hex.string(for: color), "#FF8000")
+        XCTAssertEqual(ColorValueFormat.rgb.string(for: color), "rgb(255, 128, 0)")
     }
 }
 

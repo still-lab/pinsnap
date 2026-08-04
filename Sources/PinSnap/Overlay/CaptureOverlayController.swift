@@ -5,9 +5,9 @@ import QuartzCore
 
 public enum CaptureOverlayOutcome: Sendable {
     case cancelled
-    case copied(CGImage)
-    case saved(CGImage)
-    case pinned(CGImage, frame: CGRect)
+    case copied(CGImage, selection: CaptureSelection)
+    case saved(CGImage, selection: CaptureSelection)
+    case pinned(CGImage, frame: CGRect, selection: CaptureSelection)
 }
 
 /// 截图遮罩：图层化渲染 + 选区固定后标注工具条。
@@ -36,6 +36,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private var shapeStyle: CaptureShapeStyle = .rect
     private var arrowStyle: CaptureArrowStyle = .arrow
     private var mosaicStyle: CaptureMosaicStyle = .mosaic
+    private var penStyle: CapturePenStyle = .pen
+    private var isColorPicking = false
+    private var colorHUD: ColorSampleHUD?
+    private var lastSampledColor: NSColor?
     private var draftShape: Shape?
     private var annotateStart: CGPoint?
     private var moveGrabStart: CGPoint?
@@ -65,7 +69,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         super.init()
     }
 
-    public func present(frames: [ScreenFrame]) {
+    public func present(frames: [ScreenFrame], initialSelection: CaptureSelection? = nil) {
         dismiss()
         self.frames = frames
         annotations.reset()
@@ -97,7 +101,20 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         panels.first?.makeKeyAndOrderFront(nil)
         panels.first.flatMap { ($0.contentView as? OverlayView) }?.window?.makeFirstResponder(panels.first?.contentView)
         installEscapeHatches()
-        syncLayers()
+        if let initialSelection, let locked = Self.resolvedSelection(initialSelection, in: frames) {
+            selection = locked
+            finishSelection()
+        } else {
+            syncLayers()
+        }
+    }
+
+    /// 将上次选区裁到当前帧的有效范围；屏幕消失或过小则失败。
+    private static func resolvedSelection(_ sel: CaptureSelection, in frames: [ScreenFrame]) -> CaptureSelection? {
+        guard let frame = frames.first(where: { $0.screenID == sel.screenID }) else { return nil }
+        let clamped = sel.logicalRect.intersection(frame.logicalBounds)
+        guard clamped.width >= 2, clamped.height >= 2 else { return nil }
+        return CaptureSelection(screenID: sel.screenID, logicalRect: clamped)
     }
 
     public func dismiss() {
@@ -116,6 +133,8 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         shapeStyle = .rect
         arrowStyle = .arrow
         mosaicStyle = .mosaic
+        penStyle = .pen
+        exitColorPick(updateToolbar: false)
         draftShape = nil
         annotateStart = nil
         moveGrabStart = nil
@@ -157,6 +176,11 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                 return nil
             }
             let cmd = event.modifierFlags.contains(.command)
+            // 取色：C 复制色值（无修饰键）
+            if self.isColorPicking, !cmd, event.keyCode == 8 {
+                self.copySampledColor()
+                return nil
+            }
             switch event.keyCode {
             case 36, 76:
                 self.commitCopy()
@@ -208,6 +232,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             exitOCRMode()
             return
         }
+        if isColorPicking {
+            exitColorPick()
+            return
+        }
         if selectionLocked, activeTool != nil {
             activeTool = nil
             toolbar?.setSelectedTool(nil)
@@ -227,6 +255,11 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             finishTextInput(textHostView?.currentText() ?? "")
             return
         }
+        if isColorPicking {
+            updateColorSample(at: global)
+            copySampledColor()
+            return
+        }
         if selectionLocked {
             handleAnnotateMouseDown(at: global)
             return
@@ -240,7 +273,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     fileprivate func mouseDragged(at global: CGPoint) {
-        if isOCRSelecting { return }
+        if isOCRSelecting || isColorPicking { return }
         if selectionLocked {
             handleAnnotateMouseDragged(at: global)
             return
@@ -252,7 +285,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     fileprivate func mouseUp(at global: CGPoint) {
-        if isOCRSelecting { return }
+        if isOCRSelecting || isColorPicking { return }
         if selectionLocked {
             handleAnnotateMouseUp(at: global)
             return
@@ -276,6 +309,13 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
 
     fileprivate func mouseMoved(at global: CGPoint) {
         updateCursor(at: global)
+        if isColorPicking {
+            let now = Date()
+            guard now.timeIntervalSince(lastHoverSample) >= hoverInterval else { return }
+            lastHoverSample = now
+            updateColorSample(at: global)
+            return
+        }
         guard !selectionLocked, drag.dragStart == nil else { return }
         let now = Date()
         guard now.timeIntervalSince(lastHoverSample) >= hoverInterval else { return }
@@ -288,6 +328,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     fileprivate func updateCursor(at global: CGPoint) {
+        if isColorPicking {
+            NSCursor.crosshair.set()
+            return
+        }
         if isOCRSelecting {
             if let sel = selection, sel.logicalRect.contains(global) {
                 NSCursor.iBeam.set()
@@ -374,7 +418,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             return
         }
         guard let kind = currentShapeKind() else { return }
-        draftShape = Shape(kind: kind, lineWidth: activeTool == .pen ? 3 : 2, points: [local])
+        draftShape = makeDraftShape(kind: kind, at: local)
         syncLayers()
     }
 
@@ -420,7 +464,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         }
         guard var draft = draftShape, let start = annotateStart, activeTool != nil else { return }
         let local = toSelectionLocal(global)
-        if draft.kind == .freehand {
+        if isStrokeKind(draft.kind) {
             draft.points.append(local)
         } else {
             draft.points = [start, local]
@@ -455,12 +499,12 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             return
         }
         let local = toSelectionLocal(global)
-        if draft.kind == .freehand {
+        if isStrokeKind(draft.kind) {
             draft.points.append(local)
         } else if let start = annotateStart {
             draft.points = [start, local]
         }
-        if draft.kind != .freehand {
+        if !isStrokeKind(draft.kind) {
             let pts = draft.points
             if pts.count >= 2 {
                 let dx = abs(pts[0].x - pts[1].x)
@@ -477,6 +521,28 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         draftShape = nil
         annotateStart = nil
         syncLayers()
+    }
+
+    private func isStrokeKind(_ kind: ShapeKind) -> Bool {
+        kind == .freehand || kind == .marker || kind == .eraser
+    }
+
+    private func makeDraftShape(kind: ShapeKind, at local: CGPoint) -> Shape {
+        switch kind {
+        case .marker:
+            return Shape(
+                kind: .marker,
+                lineWidth: 14,
+                points: [local],
+                color: NSColor.systemYellow.withAlphaComponent(0.45)
+            )
+        case .eraser:
+            return Shape(kind: .eraser, lineWidth: 18, points: [local], color: .black)
+        case .freehand:
+            return Shape(kind: .freehand, lineWidth: 3, points: [local])
+        default:
+            return Shape(kind: kind, lineWidth: 2, points: [local])
+        }
     }
 
     private func hitTextShape(at local: CGPoint) -> Shape? {
@@ -590,7 +656,12 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             return shapeStyle == .ellipse ? .ellipse : .rect
         case .arrow:
             return arrowStyle == .line ? .line : .arrow
-        case .pen: return .freehand
+        case .pen:
+            switch penStyle {
+            case .pen: return .freehand
+            case .marker: return .marker
+            case .eraser: return .eraser
+            }
         case .mosaic:
             return mosaicStyle == .blur ? .blur : .mosaic
         case .text: return .text
@@ -600,6 +671,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
 
     func toolbarSelectTool(_ tool: CaptureAnnotateTool?) {
         exitOCRMode()
+        exitColorPick()
         closeTextEditor(commit: false)
         activeTool = tool
         if let sel = selection {
@@ -610,18 +682,77 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     func toolbarSelectShapeStyle(_ style: CaptureShapeStyle) {
+        exitColorPick()
         shapeStyle = style
         activeTool = .shape
     }
 
     func toolbarSelectArrowStyle(_ style: CaptureArrowStyle) {
+        exitColorPick()
         arrowStyle = style
         activeTool = .arrow
     }
 
     func toolbarSelectMosaicStyle(_ style: CaptureMosaicStyle) {
+        exitColorPick()
         mosaicStyle = style
         activeTool = .mosaic
+    }
+
+    func toolbarSelectPenStyle(_ style: CapturePenStyle) {
+        exitColorPick()
+        penStyle = style
+        activeTool = .pen
+    }
+
+    func toolbarToggleEyedropper() {
+        if isColorPicking {
+            exitColorPick()
+        } else {
+            enterColorPick()
+        }
+    }
+
+    private func enterColorPick() {
+        exitOCRMode()
+        closeTextEditor(commit: false)
+        activeTool = nil
+        draftShape = nil
+        isColorPicking = true
+        toolbar?.setSelectedTool(nil)
+        toolbar?.setEyedropperOn(true)
+        if colorHUD == nil { colorHUD = ColorSampleHUD() }
+        NSCursor.crosshair.set()
+        syncLayers()
+    }
+
+    private func exitColorPick(updateToolbar: Bool = true) {
+        guard isColorPicking || colorHUD != nil else { return }
+        isColorPicking = false
+        lastSampledColor = nil
+        colorHUD?.hide()
+        colorHUD = nil
+        if updateToolbar {
+            toolbar?.setEyedropperOn(false)
+        }
+    }
+
+    private func updateColorSample(at global: CGPoint) {
+        guard let color = ColorSampler.sample(at: global, in: frames) else {
+            colorHUD?.hide()
+            return
+        }
+        lastSampledColor = color
+        let text = ColorValueFormat.current.string(for: color)
+        if colorHUD == nil { colorHUD = ColorSampleHUD() }
+        colorHUD?.show(color: color, text: text, near: global)
+    }
+
+    private func copySampledColor() {
+        guard let color = lastSampledColor else { return }
+        let text = ColorValueFormat.current.string(for: color)
+        ColorSampler.copyToPasteboard(text)
+        PinSnapLog.app.info("color copied: \(text, privacy: .public)")
     }
 
     func toolbarUndo() {
@@ -776,10 +907,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     fileprivate func commitCopy() {
-        guard let image = exportImage() else { return }
+        guard let image = exportImage(), let selection else { return }
         try? exporter.copyToClipboard(image)
         dismiss()
-        onFinish?(.copied(image))
+        onFinish?(.copied(image, selection: selection))
     }
 
     fileprivate func commitSave() {
@@ -823,9 +954,15 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         }
 
         do {
+            guard let selection else {
+                PinSnapLog.app.error("save: selection missing")
+                for p in overlayPanels { p.orderFrontRegardless() }
+                if selectionLocked { showToolbar() }
+                return
+            }
             try exporter.save(image, to: url, format: .png)
             dismiss()
-            onFinish?(.saved(image))
+            onFinish?(.saved(image, selection: selection))
         } catch {
             PinSnapLog.app.error("save failed: \(error.localizedDescription)")
             for p in overlayPanels { p.orderFrontRegardless() }
@@ -839,7 +976,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         guard let image = exportImage(), let selection else { return }
         let frame = selection.logicalRect
         dismiss()
-        onFinish?(.pinned(image, frame: frame))
+        onFinish?(.pinned(image, frame: frame, selection: selection))
     }
 
     private func exportImage() -> CGImage? {
@@ -878,7 +1015,9 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         toolbar.setShapeStyle(shapeStyle)
         toolbar.setArrowStyle(arrowStyle)
         toolbar.setMosaicStyle(mosaicStyle)
+        toolbar.setPenStyle(penStyle)
         toolbar.setSelectedTool(activeTool)
+        toolbar.setEyedropperOn(isColorPicking)
         repositionToolbar()
     }
 
@@ -1418,7 +1557,7 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
             let r = CGRect(x: min(first.x, last.x), y: min(first.y, last.y),
                            width: abs(last.x - first.x), height: abs(last.y - first.y))
             layer.path = CGPath(ellipseIn: r, transform: nil)
-        case .line, .arrow, .freehand:
+        case .line, .arrow, .freehand, .marker, .eraser:
             let path = CGMutablePath()
             path.move(to: first)
             for p in pts.dropFirst() { path.addLine(to: p) }
@@ -1431,6 +1570,10 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
                 path.addLine(to: CGPoint(x: last.x + cos(angle - .pi * 0.8) * len, y: last.y + sin(angle - .pi * 0.8) * len))
             }
             layer.path = path
+            if shape.kind == .eraser {
+                layer.strokeColor = NSColor.black.cgColor
+                layer.compositingFilter = "destinationOutBlendMode"
+            }
         case .highlight:
             guard let last = pts.last else { return nil }
             let r = CGRect(x: min(first.x, last.x), y: min(first.y, last.y),
