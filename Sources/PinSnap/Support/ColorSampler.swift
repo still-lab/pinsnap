@@ -10,8 +10,18 @@ public enum ColorValueFormat: String, CaseIterable, Sendable {
     public static let defaultsKey = "pinsnap.colorFormat"
 
     public static var current: ColorValueFormat {
-        let raw = UserDefaults.standard.string(forKey: defaultsKey) ?? hex.rawValue
-        return ColorValueFormat(rawValue: raw) ?? .hex
+        get {
+            let raw = UserDefaults.standard.string(forKey: defaultsKey) ?? hex.rawValue
+            return ColorValueFormat(rawValue: raw) ?? .hex
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey)
+        }
+    }
+
+    public mutating func toggle() {
+        self = self == .hex ? .rgb : .hex
+        ColorValueFormat.current = self
     }
 
     public func string(for color: NSColor) -> String {
@@ -37,6 +47,23 @@ public enum ColorSampler {
         let px = Int((lx * frame.scale).rounded(.down))
         let pyTopLeft = frame.image.height - Int((ly * frame.scale).rounded(.down)) - 1
         return pixelColor(frame.image, x: px, y: pyTopLeft)
+    }
+
+    /// 裁一块放大镜用的像素区域（中心为 global）。
+    public static func magnifierPatch(
+        at global: CGPoint,
+        in frames: [ScreenFrame],
+        radiusLogical: CGFloat = 8
+    ) -> (image: CGImage, color: NSColor?)? {
+        guard let frame = frames.first(where: { $0.logicalBounds.contains(global) }) else { return nil }
+        let scale = frame.scale
+        let lx = (global.x - frame.logicalBounds.minX) * scale
+        let ly = (global.y - frame.logicalBounds.minY) * scale
+        let r = radiusLogical * scale
+        let pixelRect = CGRect(x: lx - r, y: ly - r, width: r * 2, height: r * 2)
+        guard let cropped = ImageExporter().crop(frame.image, pixelRect: pixelRect) else { return nil }
+        let color = sample(at: global, in: frames)
+        return (cropped, color)
     }
 
     public static func copyToPasteboard(_ text: String) {
@@ -72,15 +99,19 @@ public enum ColorSampler {
     }
 }
 
-/// 光标旁色值条。REQ: C-09
+/// 光标旁色卡：双格式 + 快捷键说明。REQ: C-09
 @MainActor
 final class ColorSampleHUD: NSPanel {
     private let swatch = NSView()
-    private let label = NSTextField(labelWithString: "")
+    private let hexLabel = NSTextField(labelWithString: "")
+    private let rgbLabel = NSTextField(labelWithString: "")
+    private let hintLabel = NSTextField(labelWithString: "C 复制 · Tab 切换")
+    private var activeFormat: ColorValueFormat = .current
+    private var lastColor: NSColor?
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 128, height: 28),
+            contentRect: NSRect(x: 0, y: 0, width: 168, height: 72),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -93,51 +124,160 @@ final class ColorSampleHUD: NSPanel {
         ignoresMouseEvents = true
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 128, height: 28))
+        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 168, height: 72))
         chrome.material = .popover
         chrome.blendingMode = .withinWindow
         chrome.state = .active
         chrome.wantsLayer = true
-        chrome.layer?.cornerRadius = 6
+        chrome.layer?.cornerRadius = 8
         chrome.layer?.masksToBounds = true
 
         swatch.wantsLayer = true
-        swatch.layer?.cornerRadius = 3
+        swatch.layer?.cornerRadius = 4
         swatch.layer?.borderWidth = 1
         swatch.layer?.borderColor = NSColor.white.withAlphaComponent(0.7).cgColor
         swatch.translatesAutoresizingMaskIntoConstraints = false
 
-        label.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
-        label.textColor = .labelColor
-        label.translatesAutoresizingMaskIntoConstraints = false
+        configureValueLabel(hexLabel)
+        configureValueLabel(rgbLabel)
+        hintLabel.font = .systemFont(ofSize: 10, weight: .regular)
+        hintLabel.textColor = .secondaryLabelColor
+        hintLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let stack = NSStackView(views: [swatch, label])
-        stack.orientation = .horizontal
-        stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 8)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        chrome.addSubview(stack)
+        let textCol = NSStackView(views: [hexLabel, rgbLabel, hintLabel])
+        textCol.orientation = .vertical
+        textCol.alignment = .leading
+        textCol.spacing = 2
+        textCol.translatesAutoresizingMaskIntoConstraints = false
+
+        let row = NSStackView(views: [swatch, textCol])
+        row.orientation = .horizontal
+        row.alignment = .top
+        row.spacing = 8
+        row.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 10)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        chrome.addSubview(row)
         contentView = chrome
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: chrome.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: chrome.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: chrome.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: chrome.bottomAnchor),
-            swatch.widthAnchor.constraint(equalToConstant: 16),
-            swatch.heightAnchor.constraint(equalToConstant: 16),
+            row.leadingAnchor.constraint(equalTo: chrome.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: chrome.trailingAnchor),
+            row.topAnchor.constraint(equalTo: chrome.topAnchor),
+            row.bottomAnchor.constraint(equalTo: chrome.bottomAnchor),
+            swatch.widthAnchor.constraint(equalToConstant: 28),
+            swatch.heightAnchor.constraint(equalToConstant: 28),
         ])
     }
 
-    func show(color: NSColor, text: String, near global: CGPoint) {
+    private func configureValueLabel(_ label: NSTextField) {
+        label.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+        label.textColor = .labelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    func show(color: NSColor, near global: CGPoint) {
+        lastColor = color
+        activeFormat = .current
         swatch.layer?.backgroundColor = color.cgColor
-        label.stringValue = text
-        label.sizeToFit()
-        let w = max(96, label.fittingSize.width + 36)
-        let h: CGFloat = 28
-        var x = global.x + 16
-        var y = global.y - h - 12
+        refreshLabels()
+        let w: CGFloat = 168
+        let h: CGFloat = 72
+        var x = global.x + 18
+        var y = global.y - h - 14
         if let screen = NSScreen.screens.first(where: { $0.frame.contains(global) }) ?? NSScreen.main {
+            x = min(max(x, screen.frame.minX + 4), screen.frame.maxX - w - 4)
+            y = min(max(y, screen.frame.minY + 4), screen.frame.maxY - h - 4)
+        }
+        setFrame(NSRect(x: x, y: y, width: w, height: h), display: true)
+        orderFrontRegardless()
+    }
+
+    func toggleFormat() {
+        activeFormat.toggle()
+        refreshLabels()
+    }
+
+    func copyActive() -> String? {
+        guard let color = lastColor else { return nil }
+        let text = activeFormat.string(for: color)
+        ColorSampler.copyToPasteboard(text)
+        return text
+    }
+
+    func hide() {
+        orderOut(nil)
+    }
+
+    private func refreshLabels() {
+        guard let color = lastColor else { return }
+        let hex = ColorValueFormat.hex.string(for: color)
+        let rgb = ColorValueFormat.rgb.string(for: color)
+        hexLabel.stringValue = activeFormat == .hex ? "▸ \(hex)" : "  \(hex)"
+        rgbLabel.stringValue = activeFormat == .rgb ? "▸ \(rgb)" : "  \(rgb)"
+        hexLabel.textColor = activeFormat == .hex ? .labelColor : .secondaryLabelColor
+        rgbLabel.textColor = activeFormat == .rgb ? .labelColor : .secondaryLabelColor
+    }
+}
+
+/// 光标旁像素放大镜。REQ: C-08
+@MainActor
+final class MagnifierHUD: NSPanel {
+    private let imageView = NSImageView()
+    private let crosshair = CAShapeLayer()
+    private let size: CGFloat = 110
+
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: size, height: size),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        isFloatingPanel = true
+        level = .screenSaver + 2
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
+        ignoresMouseEvents = true
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+        let chrome = NSView(frame: NSRect(x: 0, y: 0, width: size, height: size))
+        chrome.wantsLayer = true
+        chrome.layer?.cornerRadius = size / 2
+        chrome.layer?.masksToBounds = true
+        chrome.layer?.borderWidth = 2
+        chrome.layer?.borderColor = NSColor.white.cgColor
+        chrome.layer?.backgroundColor = NSColor.black.cgColor
+
+        imageView.imageScaling = .scaleAxesIndependently
+        imageView.frame = chrome.bounds
+        imageView.autoresizingMask = [.width, .height]
+        chrome.addSubview(imageView)
+
+        crosshair.strokeColor = NSColor.systemRed.cgColor
+        crosshair.fillColor = nil
+        crosshair.lineWidth = 1
+        let mid = size / 2
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: mid - 10, y: mid))
+        path.addLine(to: CGPoint(x: mid + 10, y: mid))
+        path.move(to: CGPoint(x: mid, y: mid - 10))
+        path.addLine(to: CGPoint(x: mid, y: mid + 10))
+        crosshair.path = path
+        chrome.layer?.addSublayer(crosshair)
+
+        contentView = chrome
+    }
+
+    func show(patch: CGImage, near global: CGPoint) {
+        imageView.image = NSImage(cgImage: patch, size: NSSize(width: size, height: size))
+        let w = size
+        let h = size
+        var x = global.x + 20
+        var y = global.y + 20
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(global) }) ?? NSScreen.main {
+            if x + w > screen.frame.maxX - 4 { x = global.x - w - 20 }
+            if y + h > screen.frame.maxY - 4 { y = global.y - h - 20 }
             x = min(max(x, screen.frame.minX + 4), screen.frame.maxX - w - 4)
             y = min(max(y, screen.frame.minY + 4), screen.frame.maxY - h - 4)
         }

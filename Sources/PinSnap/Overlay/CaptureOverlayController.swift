@@ -39,6 +39,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private var penStyle: CapturePenStyle = .pen
     private var isColorPicking = false
     private var colorHUD: ColorSampleHUD?
+    private var magnifierHUD: MagnifierHUD?
     private var lastSampledColor: NSColor?
     private var draftShape: Shape?
     private var annotateStart: CGPoint?
@@ -135,6 +136,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         mosaicStyle = .mosaic
         penStyle = .pen
         exitColorPick(updateToolbar: false)
+        hideMagnifier()
         draftShape = nil
         annotateStart = nil
         moveGrabStart = nil
@@ -176,11 +178,41 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                 return nil
             }
             let cmd = event.modifierFlags.contains(.command)
-            // 取色：C 复制色值（无修饰键）
-            if self.isColorPicking, !cmd, event.keyCode == 8 {
-                self.copySampledColor()
-                return nil
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+            // 取色中：C 复制 · Tab 切换格式
+            if self.isColorPicking, !cmd {
+                if event.keyCode == 8 {
+                    self.copySampledColor()
+                    return nil
+                }
+                if event.keyCode == 48 {
+                    self.colorHUD?.toggleFormat()
+                    return nil
+                }
             }
+
+            // 选区方向键微调（Shift = 10pt）
+            if self.selectionLocked, !self.isEditingText, !self.isOCRSelecting, !cmd {
+                let step: CGFloat = mods.contains(.shift) ? 10 : 1
+                switch event.keyCode {
+                case 123:
+                    self.nudgeSelection(dx: -step, dy: 0)
+                    return nil
+                case 124:
+                    self.nudgeSelection(dx: step, dy: 0)
+                    return nil
+                case 125:
+                    self.nudgeSelection(dx: 0, dy: -step)
+                    return nil
+                case 126:
+                    self.nudgeSelection(dx: 0, dy: step)
+                    return nil
+                default:
+                    break
+                }
+            }
+
             switch event.keyCode {
             case 36, 76:
                 self.commitCopy()
@@ -309,17 +341,16 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
 
     fileprivate func mouseMoved(at global: CGPoint) {
         updateCursor(at: global)
-        if isColorPicking {
-            let now = Date()
-            guard now.timeIntervalSince(lastHoverSample) >= hoverInterval else { return }
-            lastHoverSample = now
-            updateColorSample(at: global)
-            return
-        }
-        guard !selectionLocked, drag.dragStart == nil else { return }
         let now = Date()
         guard now.timeIntervalSince(lastHoverSample) >= hoverInterval else { return }
         lastHoverSample = now
+        if isColorPicking {
+            updateMagnifier(at: global)
+            updateColorSample(at: global)
+            return
+        }
+        hideMagnifier()
+        guard !selectionLocked, drag.dragStart == nil else { return }
         let hit = windows.hit(at: global)
         if hit?.windowID != hoverWindow?.windowID || hit?.logicalBounds != hoverWindow?.logicalBounds {
             hoverWindow = hit
@@ -368,6 +399,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             return
         }
         selectionLocked = true
+        hideMagnifier()
         showToolbar()
         syncLayers()
     }
@@ -735,6 +767,9 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         if updateToolbar {
             toolbar?.setEyedropperOn(false)
         }
+        if selectionLocked {
+            hideMagnifier()
+        }
     }
 
     private func updateColorSample(at global: CGPoint) {
@@ -743,16 +778,51 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             return
         }
         lastSampledColor = color
-        let text = ColorValueFormat.current.string(for: color)
         if colorHUD == nil { colorHUD = ColorSampleHUD() }
-        colorHUD?.show(color: color, text: text, near: global)
+        colorHUD?.show(color: color, near: global)
     }
 
     private func copySampledColor() {
+        if let text = colorHUD?.copyActive() {
+            PinSnapLog.app.info("color copied: \(text, privacy: .public)")
+            return
+        }
         guard let color = lastSampledColor else { return }
         let text = ColorValueFormat.current.string(for: color)
         ColorSampler.copyToPasteboard(text)
         PinSnapLog.app.info("color copied: \(text, privacy: .public)")
+    }
+
+    private func updateMagnifier(at global: CGPoint) {
+        // 仅取色模式展示放大镜
+        guard isColorPicking else {
+            hideMagnifier()
+            return
+        }
+        guard let patch = ColorSampler.magnifierPatch(at: global, in: frames)?.image else {
+            hideMagnifier()
+            return
+        }
+        if magnifierHUD == nil { magnifierHUD = MagnifierHUD() }
+        magnifierHUD?.show(patch: patch, near: global)
+    }
+
+    private func hideMagnifier() {
+        magnifierHUD?.hide()
+        magnifierHUD = nil
+    }
+
+    private func nudgeSelection(dx: CGFloat, dy: CGFloat) {
+        guard let sel = selection else { return }
+        var rect = sel.logicalRect.offsetBy(dx: dx, dy: dy)
+        guard let screen = geometry.screen(id: sel.screenID) else { return }
+        rect.origin.x = min(max(rect.origin.x, screen.logicalFrame.minX),
+                            screen.logicalFrame.maxX - rect.width)
+        rect.origin.y = min(max(rect.origin.y, screen.logicalFrame.minY),
+                            screen.logicalFrame.maxY - rect.height)
+        selection = CaptureSelection(screenID: sel.screenID, logicalRect: rect)
+        repositionToolbar()
+        syncLayers()
     }
 
     func toolbarUndo() {

@@ -17,8 +17,6 @@ public enum SettingsRoute: String, Sendable, CaseIterable, Identifiable, Hashabl
 
 public struct SettingsRootView: View {
     @State private var route: SettingsRoute = .general
-    @State private var launchAtLogin = false
-    @State private var cancelOnActivate = false
     @AppStorage(ColorValueFormat.defaultsKey) private var colorFormat = ColorValueFormat.hex.rawValue
     @AppStorage("pinsnap.filenameTemplate") private var template = FilenameTemplate.default.pattern
 
@@ -34,8 +32,6 @@ public struct SettingsRootView: View {
                 switch route {
                 case .general:
                     Form {
-                        Toggle("开机启动", isOn: $launchAtLogin)
-                        Toggle("外部激活取消截图", isOn: $cancelOnActivate)
                         Picker("取色格式", selection: $colorFormat) {
                             Text("HEX").tag(ColorValueFormat.hex.rawValue)
                             Text("RGB").tag(ColorValueFormat.rgb.rawValue)
@@ -46,11 +42,19 @@ public struct SettingsRootView: View {
                         LabeledContent("截图", value: "⌃⇧A")
                         LabeledContent("贴图", value: "⌃⇧V")
                         LabeledContent("显隐贴图", value: "⌃⇧H")
+                        LabeledContent("取色复制", value: "C")
+                        LabeledContent("取色切换", value: "Tab")
+                        LabeledContent("选区微调", value: "←↑↓→")
                     }
                 case .save:
                     Form {
                         TextField("文件名模板", text: $template)
-                        Text("默认 png · 保存时可选目录").foregroundStyle(.secondary)
+                        Button("打开保存目录") {
+                            AppBootstrap.shared.coordinator.openLastSaveDirectory()
+                        }
+                        Button("清空上次区域") {
+                            AppBootstrap.shared.coordinator.clearCaptureHistory()
+                        }
                     }
                 case .purchase:
                     UpgradeView()
@@ -105,7 +109,6 @@ public struct UpgradeView: View {
             #if DEBUG
             FeatureGate.shared.debugForcePro = true
             FeatureGate.shared.applyEntitlement(isPro: true)
-            Toast.shared.show("调试：已解锁 Pro")
             #endif
         }
     }

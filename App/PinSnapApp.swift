@@ -8,6 +8,7 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var upgradeWindow: NSWindow?
+    private var menuBarImage: NSImage?
 
     static func main() {
         let app = NSApplication.shared
@@ -21,6 +22,9 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let boot = AppBootstrap.shared
         boot.presentUpgrade = { [weak self] in self?.showUpgrade() }
         boot.presentSettings = { [weak self] in self?.showSettings() }
+        boot.coordinator.onDelayCountdown = { [weak self] remaining in
+            self?.updateDelayCountdown(remaining)
+        }
         boot.start()
         setupStatusItem()
 
@@ -38,37 +42,61 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        menuBarImage = Self.loadMenuBarImage()
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "PinSnap")
+            button.image = menuBarImage
             button.image?.isTemplate = true
             button.toolTip = "PinSnap"
+            button.title = ""
         }
         item.menu = buildStatusMenu()
         statusItem = item
+    }
+
+    private static func loadMenuBarImage() -> NSImage {
+        if let named = NSImage(named: "MenuBarIcon") {
+            named.isTemplate = true
+            return named
+        }
+        let fallback = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "PinSnap")
+            ?? NSImage(size: NSSize(width: 18, height: 18))
+        fallback.isTemplate = true
+        return fallback
+    }
+
+    private func updateDelayCountdown(_ remaining: Int?) {
+        guard let button = statusItem?.button else { return }
+        if let remaining {
+            button.image = nil
+            button.title = "\(remaining)"
+            button.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+        } else {
+            button.title = ""
+            button.image = menuBarImage
+            button.image?.isTemplate = true
+        }
     }
 
     private func rebuildStatusMenu() {
         statusItem?.menu = buildStatusMenu()
     }
 
-    /// 对标 Snipaste / iShot：分区下拉，不展示快捷键列。
+    /// 上动作、下逃逸；冷入口进设置。左键仅出菜单（不做单击截图）。
     private func buildStatusMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.delegate = self
 
-        menu.addItem(actionItem("偏好设置", #selector(openSettings)))
-        menu.addItem(.separator())
-
         menu.addItem(actionItem("截图", #selector(capture)))
         menu.addItem(actionItem("延时截图", #selector(captureDelayed)))
-        let lastRegion = actionItem("上次区域截图", #selector(captureLastRegion))
+        let lastRegion = actionItem("上次区域", #selector(captureLastRegion))
         lastRegion.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
         menu.addItem(lastRegion)
-        menu.addItem(actionItem("截图并自动复制", #selector(captureAutoCopy)))
-        menu.addItem(actionItem("从剪切板贴图", #selector(paste)))
-        menu.addItem(actionItem("隐藏/显示所有贴图", #selector(togglePins)))
-        menu.addItem(actionItem("清空截屏历史", #selector(clearHistory)))
+        menu.addItem(actionItem("截图并复制", #selector(captureAutoCopy)))
+        menu.addItem(.separator())
+
+        menu.addItem(actionItem("贴图", #selector(paste)))
+        menu.addItem(actionItem("隐藏/显示贴图", #selector(togglePins)))
         menu.addItem(.separator())
 
         let disableHotKeys = NSMenuItem(
@@ -78,23 +106,31 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
         disableHotKeys.target = self
         disableHotKeys.state = AppBootstrap.shared.hotKeysDisabled ? .on : .off
+        disableHotKeys.image = nil
         menu.addItem(disableHotKeys)
-        menu.addItem(.separator())
-
-        menu.addItem(actionItem("打开最后保存目录", #selector(openLastSaveDir)))
+        menu.addItem(actionItem("设置", #selector(openSettings)))
         menu.addItem(actionItem(
             FeatureGate.shared.isPro ? "管理专业版…" : "解锁专业版…",
             #selector(openUpgrade)
         ))
         menu.addItem(.separator())
-
         menu.addItem(actionItem("退出", #selector(quit)))
         return menu
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        for item in menu.items where item.action == #selector(captureLastRegion) {
-            item.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
+        for item in menu.items {
+            // 系统可能给「设置」等项自动塞 SF Symbol，打开前清掉
+            item.image = nil
+            if item.action == #selector(captureLastRegion) {
+                item.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
+            }
+        }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        for item in menu.items {
+            item.image = nil
         }
     }
 
@@ -102,11 +138,11 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
         item.target = self
         item.isEnabled = true
+        item.image = nil
         return item
     }
 
     @objc private func capture() {
-        // 等菜单收起后再截帧，避免菜单残影 / 抢焦点导致遮罩收不到拖拽
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             AppBootstrap.shared.coordinator.beginCapture(autoCopy: false)
         }
@@ -138,17 +174,9 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AppBootstrap.shared.coordinator.togglePinVisibility()
     }
 
-    @objc private func clearHistory() {
-        AppBootstrap.shared.coordinator.clearCaptureHistory()
-    }
-
     @objc private func toggleDisableHotKeys(_ sender: NSMenuItem) {
         AppBootstrap.shared.toggleHotKeysDisabled()
         rebuildStatusMenu()
-    }
-
-    @objc private func openLastSaveDir() {
-        AppBootstrap.shared.coordinator.openLastSaveDirectory()
     }
 
     @objc private func openSettings() { showSettings() }

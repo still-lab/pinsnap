@@ -23,6 +23,8 @@ public final class SessionCoordinator {
     private var didOpenScreenSettingsThisProcess = false
 
     public var onFreeLimit: (() -> Void)?
+    /// 延时倒计时：剩余秒数；`nil` 表示结束或取消。菜单栏显示数字。
+    public var onDelayCountdown: ((Int?) -> Void)?
 
     public var hasLastSelection: Bool { lastSelection != nil }
 
@@ -49,16 +51,27 @@ public final class SessionCoordinator {
         Task { await beginCaptureAsync(autoCopy: autoCopy, initialSelection: nil) }
     }
 
-    /// REQ: C-11 — 固定延时后进入普通截图。
+    /// REQ: C-11 — 固定延时后进入普通截图；菜单栏逐秒倒计时。
     public func beginDelayedCapture(autoCopy: Bool = false) {
         cancelDelay()
         guard state == .idle || state == .preparing else { return }
         state = .preparing
-        let seconds = Self.delayCaptureSeconds
+        let total = Int(Self.delayCaptureSeconds)
         delayTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            guard !Task.isCancelled, self.state == .preparing else { return }
+            for remaining in stride(from: total, through: 1, by: -1) {
+                guard !Task.isCancelled, self.state == .preparing else {
+                    self.onDelayCountdown?(nil)
+                    return
+                }
+                self.onDelayCountdown?(remaining)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            guard !Task.isCancelled, self.state == .preparing else {
+                self.onDelayCountdown?(nil)
+                return
+            }
+            self.onDelayCountdown?(nil)
             self.delayTask = nil
             await self.beginCaptureAsync(autoCopy: autoCopy, initialSelection: nil)
         }
@@ -105,7 +118,6 @@ public final class SessionCoordinator {
 
     public func clearCaptureHistory() {
         lastSelection = nil
-        Toast.shared.show("已清空")
     }
 
     public func openLastSaveDirectory() {
@@ -123,15 +135,13 @@ public final class SessionCoordinator {
                 image = i
             }
             _ = try pins.create(image: image, at: nil)
-            Toast.shared.show("已贴图")
         } catch let error as PinStoreError {
             if case .freeLimitReached = error {
                 onFreeLimit?()
-            } else {
-                Toast.shared.show(error.localizedDescription)
             }
+            PinSnapLog.pin.error("paste: \(error.localizedDescription)")
         } catch {
-            Toast.shared.show(error.localizedDescription)
+            PinSnapLog.pin.error("paste: \(error.localizedDescription)")
         }
     }
 
@@ -143,6 +153,7 @@ public final class SessionCoordinator {
         guard delayTask != nil else { return }
         delayTask?.cancel()
         delayTask = nil
+        onDelayCountdown?(nil)
         if state == .preparing {
             state = .idle
         }
@@ -155,20 +166,17 @@ public final class SessionCoordinator {
             break
         case .copied(_, let selection):
             lastSelection = selection
-            Toast.shared.show("已复制")
         case .saved(_, let selection):
             lastSelection = selection
-            Toast.shared.show("已保存")
         case .pinned(let image, let frame, let selection):
             lastSelection = selection
             do {
                 _ = try pins.create(image: image, at: frame)
-                Toast.shared.show("已贴图")
             } catch let error as PinStoreError {
                 if case .freeLimitReached = error { onFreeLimit?() }
-                else { Toast.shared.show(error.localizedDescription) }
+                else { PinSnapLog.pin.error("\(error.localizedDescription)") }
             } catch {
-                Toast.shared.show(error.localizedDescription)
+                PinSnapLog.pin.error("\(error.localizedDescription)")
             }
         }
         state = .idle
