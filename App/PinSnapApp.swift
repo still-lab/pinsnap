@@ -180,7 +180,7 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
 
         menu.addItem(actionItem("截图", #selector(capture), shortcut: "F1"))
-        menu.addItem(actionItem("延时截图", #selector(captureDelayed)))
+        menu.addItem(actionItem("延时截图", #selector(captureDelayed), shortcut: "⌘T"))
         let lastRegion = actionItem("上次区域", #selector(captureLastRegion), shortcut: "F1×2")
         lastRegion.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
         menu.addItem(lastRegion)

@@ -175,6 +175,55 @@ final class ScrollStitchTests: XCTestCase {
     }
 }
 
+final class ColorSamplerTests: XCTestCase {
+    func testSampleMatchesTopLeftOriginPixels() throws {
+        // 顶左原点位图：TL 红、TR 绿、BL 蓝、BR 白
+        let image = try XCTUnwrap(Self.makeCornerColorImage())
+        let frame = ScreenFrame(
+            screenID: ScreenID(rawValue: 1),
+            logicalBounds: CGRect(x: 0, y: 0, width: 4, height: 4),
+            scale: 1,
+            image: image
+        )
+        let frames = [frame]
+
+        let tl = try XCTUnwrap(ColorSampler.sample(at: CGPoint(x: 0.5, y: 3.5), in: frames))
+        let bl = try XCTUnwrap(ColorSampler.sample(at: CGPoint(x: 0.5, y: 0.5), in: frames))
+        let tr = try XCTUnwrap(ColorSampler.sample(at: CGPoint(x: 3.5, y: 3.5), in: frames))
+        let br = try XCTUnwrap(ColorSampler.sample(at: CGPoint(x: 3.5, y: 0.5), in: frames))
+
+        XCTAssertEqual(ColorValueFormat.hex.string(for: tl), "#FF0000")
+        XCTAssertEqual(ColorValueFormat.hex.string(for: bl), "#0000FF")
+        XCTAssertEqual(ColorValueFormat.hex.string(for: tr), "#00FF00")
+        XCTAssertEqual(ColorValueFormat.hex.string(for: br), "#FFFFFF")
+    }
+
+    /// 按顶左原点写入 RGBA 缓冲。
+    private static func makeCornerColorImage() -> CGImage? {
+        let w = 4, h = 4
+        var data = [UInt8](repeating: 0, count: w * h * 4)
+        func setPixel(x: Int, y: Int, r: UInt8, g: UInt8, b: UInt8) {
+            let i = (y * w + x) * 4
+            data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255
+        }
+        setPixel(x: 0, y: 0, r: 255, g: 0, b: 0) // TL red
+        setPixel(x: 3, y: 0, r: 0, g: 255, b: 0) // TR green
+        setPixel(x: 0, y: 3, r: 0, g: 0, b: 255) // BL blue
+        setPixel(x: 3, y: 3, r: 255, g: 255, b: 255) // BR white
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: &data,
+            width: w,
+            height: h,
+            bitsPerComponent: 8,
+            bytesPerRow: w * 4,
+            space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        return ctx.makeImage()
+    }
+}
+
 private extension CGImage {
     static func makeSolid(width: Int, height: Int) -> CGImage? {
         let cs = CGColorSpaceCreateDeviceRGB()

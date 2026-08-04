@@ -2,7 +2,7 @@ import AppKit
 import Carbon
 import Foundation
 
-/// 全局热键。默认 F1 截图 / F1 连击上次区域 / F3 贴图 / ⌘H 隐藏 / ⌘⇧H 显示。
+/// 全局热键。默认 F1 截图 / F1 连击上次区域 / ⌘T 延时 / F3 贴图 / ⌘H 隐藏 / ⌘⇧H 显示。
 @MainActor
 public final class HotKeyCenter {
     public enum Action: UInt32 {
@@ -11,6 +11,7 @@ public final class HotKeyCenter {
         case hidePins = 3
         case showPins = 4
         case captureLastRegion = 5
+        case delayedCapture = 6
     }
 
     /// F1 单击与连击的判定窗。
@@ -28,6 +29,7 @@ public final class HotKeyCenter {
         case f3 = 2
         case hidePins = 3
         case showPins = 4
+        case delayedCapture = 5
     }
 
     public init() {}
@@ -58,7 +60,8 @@ public final class HotKeyCenter {
         try install(id: RegisteredID.f3.rawValue, key: UInt32(kVK_F3), mods: 0)
         try install(id: RegisteredID.hidePins.rawValue, key: UInt32(kVK_ANSI_H), mods: UInt32(cmdKey))
         try install(id: RegisteredID.showPins.rawValue, key: UInt32(kVK_ANSI_H), mods: UInt32(cmdKey + shiftKey))
-        PinSnapLog.app.info("Hotkeys registered F1 / F1×2 / F3 / ⌘H / ⌘⇧H")
+        try install(id: RegisteredID.delayedCapture.rawValue, key: UInt32(kVK_ANSI_T), mods: UInt32(cmdKey))
+        PinSnapLog.app.info("Hotkeys registered F1 / F1×2 / ⌘T / F3 / ⌘H / ⌘⇧H")
     }
 
     public func unregister() {
@@ -83,6 +86,8 @@ public final class HotKeyCenter {
             onAction?(.hidePins)
         case .showPins:
             onAction?(.showPins)
+        case .delayedCapture:
+            onAction?(.delayedCapture)
         case .none:
             break
         }

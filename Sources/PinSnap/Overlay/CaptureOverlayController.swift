@@ -755,6 +755,9 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         toolbar?.setEyedropperOn(true)
         if colorHUD == nil { colorHUD = ColorSampleHUD() }
         NSCursor.crosshair.set()
+        let loc = NSEvent.mouseLocation
+        updateMagnifier(at: loc)
+        updateColorSample(at: loc)
         syncLayers()
     }
 

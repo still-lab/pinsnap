@@ -47,6 +47,8 @@ public final class AppBootstrap {
                 } else {
                     self.coordinator.beginCapture()
                 }
+            case .delayedCapture:
+                self.coordinator.beginDelayedCapture()
             case .paste:
                 self.coordinator.beginPasteFromClipboard()
             case .hidePins:

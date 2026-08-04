@@ -40,6 +40,7 @@ public struct SettingsRootView: View {
                 case .hotkeys:
                     Form {
                         LabeledContent("截图", value: "F1")
+                        LabeledContent("延时截图", value: "⌘T")
                         LabeledContent("上次区域", value: "F1×2")
                         LabeledContent("贴图", value: "F3")
                         LabeledContent("隐藏贴图", value: "⌘H")

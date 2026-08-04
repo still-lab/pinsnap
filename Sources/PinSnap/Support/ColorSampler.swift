@@ -74,6 +74,10 @@ public enum ColorSampler {
 
     private static func pixelColor(_ image: CGImage, x: Int, y: Int) -> NSColor? {
         guard x >= 0, y >= 0, x < image.width, y < image.height else { return nil }
+        // 优先直读位图，避免 CGContext 绘制时的坐标系/色域转换误差
+        if let direct = readRGBAPixel(image, x: x, y: y) {
+            return direct
+        }
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         var pixel = [UInt8](repeating: 0, count: 4)
         guard let ctx = CGContext(
@@ -85,15 +89,80 @@ public enum ColorSampler {
             space: colorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
-        ctx.draw(image, in: CGRect(x: -x, y: -y, width: image.width, height: image.height))
+        // y 为图像顶左原点；CGContext 绘制原点在左下，需换算
+        ctx.interpolationQuality = .none
+        ctx.draw(
+            image,
+            in: CGRect(
+                x: -CGFloat(x),
+                y: CGFloat(y) - CGFloat(image.height - 1),
+                width: CGFloat(image.width),
+                height: CGFloat(image.height)
+            )
+        )
+        return colorFromPremultipliedRGBA(pixel)
+    }
+
+    /// 从 CGImage 数据提供方按顶左原点读取一像素（兼容常见 8bpc RGBA/BGRA）。
+    private static func readRGBAPixel(_ image: CGImage, x: Int, y: Int) -> NSColor? {
+        guard let provider = image.dataProvider, let data = provider.data else { return nil }
+        let ptr = CFDataGetBytePtr(data)
+        let length = CFDataGetLength(data)
+        let bpp = max(image.bitsPerPixel / 8, 1)
+        let bpc = image.bitsPerComponent
+        guard bpc == 8, bpp >= 3 else { return nil }
+        let row = max(image.bytesPerRow, image.width * bpp)
+        let offset = y * row + x * bpp
+        guard offset + bpp <= length else { return nil }
+
+        let byteOrder = CGBitmapInfo(rawValue: image.bitmapInfo.rawValue).intersection(.byteOrderMask)
+        let alphaInfo = image.alphaInfo
+        let bytes = (0..<bpp).map { ptr![offset + $0] }
+
+        let r: UInt8
+        let g: UInt8
+        let b: UInt8
+        let a: UInt8
+        switch (byteOrder, alphaInfo) {
+        case (.byteOrder32Little, .premultipliedFirst), (.byteOrder32Little, .first), (.byteOrder32Little, .noneSkipFirst):
+            // BGRA
+            b = bytes[0]; g = bytes[1]; r = bytes[2]
+            a = bpp >= 4 ? bytes[3] : 255
+        case (.byteOrder32Little, .premultipliedLast), (.byteOrder32Little, .last), (.byteOrder32Little, .noneSkipLast):
+            // ABGR unusual — fall through to draw path
+            return nil
+        case (_, .premultipliedLast), (_, .last), (_, .noneSkipLast):
+            // RGBA
+            r = bytes[0]; g = bytes[1]; b = bytes[2]
+            a = bpp >= 4 ? bytes[3] : 255
+        case (_, .premultipliedFirst), (_, .first), (_, .noneSkipFirst):
+            // ARGB
+            a = bytes[0]; r = bytes[1]; g = bytes[2]; b = bytes[3]
+        default:
+            if bpp == 3 || bpp == 4 {
+                r = bytes[0]; g = bytes[1]; b = bytes[2]
+                a = bpp >= 4 ? bytes[3] : 255
+            } else {
+                return nil
+            }
+        }
+        return colorFromPremultipliedRGBA([r, g, b, a])
+    }
+
+    private static func colorFromPremultipliedRGBA(_ pixel: [UInt8]) -> NSColor {
         let a = CGFloat(pixel[3]) / 255
-        guard a > 0 else {
-            return NSColor(srgbRed: CGFloat(pixel[0]) / 255, green: CGFloat(pixel[1]) / 255, blue: CGFloat(pixel[2]) / 255, alpha: 1)
+        if a > 0.001 && a < 0.999 {
+            return NSColor(
+                srgbRed: min(CGFloat(pixel[0]) / 255 / a, 1),
+                green: min(CGFloat(pixel[1]) / 255 / a, 1),
+                blue: min(CGFloat(pixel[2]) / 255 / a, 1),
+                alpha: 1
+            )
         }
         return NSColor(
-            srgbRed: CGFloat(pixel[0]) / 255 / a,
-            green: CGFloat(pixel[1]) / 255 / a,
-            blue: CGFloat(pixel[2]) / 255 / a,
+            srgbRed: CGFloat(pixel[0]) / 255,
+            green: CGFloat(pixel[1]) / 255,
+            blue: CGFloat(pixel[2]) / 255,
             alpha: 1
         )
     }
@@ -176,8 +245,10 @@ final class ColorSampleHUD: NSPanel {
     }
 
     func show(color: NSColor, near global: CGPoint) {
+        if lastColor == nil {
+            activeFormat = .current
+        }
         lastColor = color
-        activeFormat = .current
         swatch.layer?.backgroundColor = color.cgColor
         refreshLabels()
         let w: CGFloat = 168
@@ -205,6 +276,7 @@ final class ColorSampleHUD: NSPanel {
     }
 
     func hide() {
+        lastColor = nil
         orderOut(nil)
     }
 

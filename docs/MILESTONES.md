@@ -9,7 +9,7 @@
 - [x] 用 Xcode 创建 macOS App（Bundle `app.pinsnap.macos`，macOS 13，Universal）
 - [x] 启用 App Sandbox；无多余 entitlement
 - [x] MenuBarExtra / 状态栏图标
-- [x] HotKeyCenter 注册 F1 / F1×2 / F3 / ⌘H / ⌘⇧H
+- [x] HotKeyCenter 注册 F1 / F1×2 / ⌘T / F3 / ⌘H / ⌘⇧H
 - [x] 无权限时深链系统设置（**不做**自定义引导窗）
 - [x] Settings 空壳（SwiftUI）
 - [x] 把 `Sources/PinSnap/*` 接口文件纳入 target
