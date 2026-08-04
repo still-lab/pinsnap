@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		0CC0918C093AAB7DBC8F15FD /* PinSnapApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD31A3151F5BB8D9B5F8160B /* PinSnapApp.swift */; };
+		74A0CBDF8DB9948B07F8E084 /* MenuBar in Resources */ = {isa = PBXBuildFile; fileRef = A57DD8D54A439DBDEF986339 /* MenuBar */; };
+		BFC14F77F907378FFFAC5423 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 75115D147E96D83DCB4D417A /* Assets.xcassets */; };
 		D91A13CF307C44F9378CEF89 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 04316438F4B1612960ADFB45 /* InfoPlist.strings */; };
 		F32863EFF2994CEE287909C9 /* PinSnapKit in Frameworks */ = {isa = PBXBuildFile; productRef = 02FB1FFC5C88B328D494318A /* PinSnapKit */; };
 /* End PBXBuildFile section */
@@ -16,9 +18,11 @@
 		04316438F4B1612960ADFB45 /* InfoPlist.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = InfoPlist.strings; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
 		1EC76316BB0A6D220A26FE8F /* PinSnap */ = {isa = PBXFileReference; lastKnownFileType = folder; name = PinSnap; path = .; sourceTree = SOURCE_ROOT; };
 		21B183FD0D26A60ED7C9BA88 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		75115D147E96D83DCB4D417A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8294BF6213898CC40B6AEFDA /* PinSnap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PinSnap.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		82C677810FC495C0239FEAEC /* PinSnap.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PinSnap.entitlements; sourceTree = "<group>"; };
 		9F414B8E5374264F50673EF9 /* PinSnapDebug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PinSnapDebug.entitlements; sourceTree = "<group>"; };
+		A57DD8D54A439DBDEF986339 /* MenuBar */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MenuBar; path = Resources/MenuBar; sourceTree = SOURCE_ROOT; };
 		CD31A3151F5BB8D9B5F8160B /* PinSnapApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinSnapApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -34,11 +38,21 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		4CC55E159766B1CDFF10C13F /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				75115D147E96D83DCB4D417A /* Assets.xcassets */,
+				A57DD8D54A439DBDEF986339 /* MenuBar */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
 		512B8F51498189F8A798AEA1 = {
 			isa = PBXGroup;
 			children = (
 				D069B1779F5A32F40D19F74D /* App */,
 				751215E1833292DE29D166CD /* Packages */,
+				4CC55E159766B1CDFF10C13F /* Resources */,
 				E9E07603D8D957F3FA9D8878 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -133,7 +147,9 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BFC14F77F907378FFFAC5423 /* Assets.xcassets in Resources */,
 				D91A13CF307C44F9378CEF89 /* InfoPlist.strings in Resources */,
+				74A0CBDF8DB9948B07F8E084 /* MenuBar in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

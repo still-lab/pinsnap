@@ -9,6 +9,8 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var settingsWindow: NSWindow?
     private var upgradeWindow: NSWindow?
     private var menuBarImage: NSImage?
+    private var statusMenu: NSMenu?
+    private var isShowingDelayCountdown = false
 
     static func main() {
         let app = NSApplication.shared
@@ -19,14 +21,17 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // macOS 26+ 会给「选项/设置」等标题自动塞齿轮；对本 App 关掉
+        UserDefaults.standard.register(defaults: ["NSMenuEnableActionImages": false])
+
         let boot = AppBootstrap.shared
         boot.presentUpgrade = { [weak self] in self?.showUpgrade() }
         boot.presentSettings = { [weak self] in self?.showSettings() }
         boot.coordinator.onDelayCountdown = { [weak self] remaining in
             self?.updateDelayCountdown(remaining)
         }
-        boot.start()
         setupStatusItem()
+        boot.start()
 
         if CommandLine.arguments.contains("--self-test-capture") {
             Task { @MainActor in
@@ -41,47 +46,134 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func setupStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         menuBarImage = Self.loadMenuBarImage()
-        if let button = item.button {
-            button.image = menuBarImage
-            button.image?.isTemplate = true
-            button.toolTip = "PinSnap"
-            button.title = ""
-        }
-        item.menu = buildStatusMenu()
+
+        // squareLength：即使瞬间没图也不会把槽位宽度塌成 0（看起来像「图标消失」）
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem = item
+        // 不挂 statusItem.menu，避免系统往状态栏按钮塞齿轮
+        item.menu = nil
+        statusMenu = buildStatusMenu()
+        applyStatusItemIcon()
+        if let button = item.button {
+            button.target = self
+            button.action = #selector(statusItemClicked(_:))
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.setAccessibilityLabel("PinSnap")
+        }
+        item.isVisible = true
+
+        // 启动后系统偶发清掉 button.image；延后盖回
+        for delay in [0.0, 0.2, 1.0] as [TimeInterval] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.applyStatusItemIcon()
+            }
+        }
     }
 
+    /// 优先读独立 PNG（带 alpha 的模板图）；再退回 Assets / SF Symbol。
     private static func loadMenuBarImage() -> NSImage {
-        if let named = NSImage(named: "MenuBarIcon") {
-            named.isTemplate = true
-            return named
+        let pointSize = NSSize(width: 18, height: 18)
+
+        if let fromFiles = loadMenuBarPNGFiles() {
+            let baked = bakeTemplate(fromFiles, pointSize: pointSize)
+            PinSnapLog.app.info("MenuBarIcon from PNG files")
+            return baked
         }
+        if let named = NSImage(named: "MenuBarIcon") {
+            let baked = bakeTemplate(named, pointSize: pointSize)
+            PinSnapLog.app.info("MenuBarIcon from Assets.car")
+            return baked
+        }
+        PinSnapLog.app.error("MenuBarIcon missing; fallback SF Symbol")
         let fallback = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "PinSnap")
-            ?? NSImage(size: NSSize(width: 18, height: 18))
-        fallback.isTemplate = true
-        return fallback
+            ?? NSImage(size: pointSize)
+        return bakeTemplate(fallback, pointSize: pointSize)
+    }
+
+    private static func loadMenuBarPNGFiles() -> NSImage? {
+        let bundle = Bundle.main
+        let candidates = [
+            bundle.url(forResource: "icon_16", withExtension: "png", subdirectory: "MenuBar"),
+            bundle.url(forResource: "icon_16", withExtension: "png"),
+            bundle.resourceURL?.appendingPathComponent("MenuBar/icon_16.png"),
+        ].compactMap { $0 }
+        guard let url16 = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }),
+              let data16 = try? Data(contentsOf: url16),
+              let rep16 = NSBitmapImageRep(data: data16) else {
+            return nil
+        }
+        let img = NSImage()
+        img.addRepresentation(rep16)
+        let url32 = url16.deletingLastPathComponent().appendingPathComponent("icon_32.png")
+        if let data32 = try? Data(contentsOf: url32),
+           let rep32 = NSBitmapImageRep(data: data32) {
+            img.addRepresentation(rep32)
+        }
+        img.size = NSSize(width: 16, height: 16)
+        return img
+    }
+
+    /// 画进固定尺寸的新 NSImage，并标成 template，避免 Assets.car 无 alpha / copy 丢 representation。
+    private static func bakeTemplate(_ source: NSImage, pointSize: NSSize) -> NSImage {
+        let baked = NSImage(size: pointSize, flipped: false) { rect in
+            source.draw(
+                in: rect,
+                from: NSRect(origin: .zero, size: source.size),
+                operation: .sourceOver,
+                fraction: 1.0,
+                respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.high]
+            )
+            return true
+        }
+        baked.isTemplate = true
+        return baked
+    }
+
+    private func applyStatusItemIcon() {
+        guard !isShowingDelayCountdown, let item = statusItem, let button = item.button else { return }
+        guard let icon = menuBarImage else { return }
+        item.length = NSStatusItem.squareLength
+        button.title = ""
+        button.image = icon
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.toolTip = "PinSnap"
+        button.appearsDisabled = false
     }
 
     private func updateDelayCountdown(_ remaining: Int?) {
-        guard let button = statusItem?.button else { return }
+        guard let item = statusItem, let button = item.button, let icon = menuBarImage else { return }
         if let remaining {
-            button.image = nil
+            isShowingDelayCountdown = true
+            // 绝不把 image 置 nil：置空后槽位/模板图容易「消失」，且系统可能短暂露出齿轮
+            item.length = NSStatusItem.variableLength
+            button.image = icon
+            button.imagePosition = .imageLeading
             button.title = "\(remaining)"
             button.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
         } else {
+            isShowingDelayCountdown = false
             button.title = ""
-            button.image = menuBarImage
-            button.image?.isTemplate = true
+            applyStatusItemIcon()
         }
     }
 
-    private func rebuildStatusMenu() {
-        statusItem?.menu = buildStatusMenu()
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        guard let menu = statusMenu else { return }
+        refreshStatusMenu(menu)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let button = self.statusItem?.button else { return }
+            menu.popUp(
+                positioning: nil,
+                at: NSPoint(x: 0, y: button.bounds.height),
+                in: button
+            )
+            self.applyStatusItemIcon()
+        }
     }
 
-    /// 上动作、下逃逸；冷入口进设置。左键仅出菜单（不做单击截图）。
     private func buildStatusMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -106,9 +198,8 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
         disableHotKeys.target = self
         disableHotKeys.state = AppBootstrap.shared.hotKeysDisabled ? .on : .off
-        disableHotKeys.image = nil
         menu.addItem(disableHotKeys)
-        menu.addItem(actionItem("设置", #selector(openSettings)))
+        menu.addItem(actionItem("选项", #selector(openSettings)))
         menu.addItem(actionItem(
             FeatureGate.shared.isPro ? "管理专业版…" : "解锁专业版…",
             #selector(openUpgrade)
@@ -118,27 +209,25 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return menu
     }
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
+    private func refreshStatusMenu(_ menu: NSMenu) {
         for item in menu.items {
-            // 系统可能给「设置」等项自动塞 SF Symbol，打开前清掉
-            item.image = nil
             if item.action == #selector(captureLastRegion) {
                 item.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
+            }
+            if item.action == #selector(toggleDisableHotKeys(_:)) {
+                item.state = AppBootstrap.shared.hotKeysDisabled ? .on : .off
             }
         }
     }
 
-    func menuWillOpen(_ menu: NSMenu) {
-        for item in menu.items {
-            item.image = nil
-        }
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        refreshStatusMenu(menu)
     }
 
     private func actionItem(_ title: String, _ selector: Selector) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
         item.target = self
         item.isEnabled = true
-        item.image = nil
         return item
     }
 
@@ -176,7 +265,7 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleDisableHotKeys(_ sender: NSMenuItem) {
         AppBootstrap.shared.toggleHotKeysDisabled()
-        rebuildStatusMenu()
+        sender.state = AppBootstrap.shared.hotKeysDisabled ? .on : .off
     }
 
     @objc private func openSettings() { showSettings() }

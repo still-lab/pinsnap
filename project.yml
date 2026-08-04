@@ -20,8 +20,12 @@ targets:
     platform: macOS
     sources:
       - path: App
-    resources:
       - path: Resources/Assets.xcassets
+        buildPhase: resources
+      - path: Resources/MenuBar
+        buildPhase: resources
+        type: folder
+    resources:
       - path: App/zh-Hans.lproj
     settings:
       base:
