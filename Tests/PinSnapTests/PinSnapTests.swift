@@ -198,6 +198,19 @@ final class ColorSamplerTests: XCTestCase {
         XCTAssertEqual(ColorValueFormat.hex.string(for: br), "#FFFFFF")
     }
 
+    func testMagnifierPatchReturnsImage() throws {
+        let image = try XCTUnwrap(Self.makeCornerColorImage())
+        let frame = ScreenFrame(
+            screenID: ScreenID(rawValue: 1),
+            logicalBounds: CGRect(x: 0, y: 0, width: 4, height: 4),
+            scale: 1,
+            image: image
+        )
+        let patch = try XCTUnwrap(ColorSampler.magnifierPatch(at: CGPoint(x: 2, y: 2), in: [frame], radiusLogical: 1))
+        XCTAssertGreaterThan(patch.image.width, 0)
+        XCTAssertGreaterThan(patch.image.height, 0)
+    }
+
     /// 按顶左原点写入 RGBA 缓冲。
     private static func makeCornerColorImage() -> CGImage? {
         let w = 4, h = 4

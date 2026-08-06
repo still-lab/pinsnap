@@ -49,7 +49,7 @@ public enum ColorSampler {
         return pixelColor(frame.image, x: px, y: pyTopLeft)
     }
 
-    /// 裁一块放大镜用的像素区域（中心为 global）。
+    /// 裁一块放大镜用的像素区域（中心为光标像素；坐标系与 `ScreenGeometry.pixelRect` 一致，Y 自下而上）。
     public static func magnifierPatch(
         at global: CGPoint,
         in frames: [ScreenFrame],
@@ -59,9 +59,21 @@ public enum ColorSampler {
         let scale = frame.scale
         let lx = (global.x - frame.logicalBounds.minX) * scale
         let ly = (global.y - frame.logicalBounds.minY) * scale
-        let r = radiusLogical * scale
-        let pixelRect = CGRect(x: lx - r, y: ly - r, width: r * 2, height: r * 2)
-        guard let cropped = ImageExporter().crop(frame.image, pixelRect: pixelRect) else { return nil }
+        let px = Int(lx.rounded(.down))
+        let py = Int(ly.rounded(.down))
+        let half = max(Int((radiusLogical * scale).rounded()), 1)
+        let side = half * 2 + 1
+        var pixelRect = CGRect(
+            x: CGFloat(px - half),
+            y: CGFloat(py - half),
+            width: CGFloat(side),
+            height: CGFloat(side)
+        )
+        let imageBounds = CGRect(x: 0, y: 0, width: frame.image.width, height: frame.image.height)
+        pixelRect = pixelRect.intersection(imageBounds)
+        guard pixelRect.width >= 1, pixelRect.height >= 1,
+              let cropped = ImageExporter().crop(frame.image, pixelRect: pixelRect)
+        else { return nil }
         let color = sample(at: global, in: frames)
         return (cropped, color)
     }
@@ -297,8 +309,8 @@ final class ColorSampleHUD: NSPanel {
 @MainActor
 final class MagnifierHUD: NSPanel {
     private let imageView = NSImageView()
-    private let crosshair = CAShapeLayer()
-    private let size: CGFloat = 110
+    private let reticle = MagnifierReticleView()
+    private let size: CGFloat = 120
 
     init() {
         super.init(
@@ -328,23 +340,19 @@ final class MagnifierHUD: NSPanel {
         imageView.autoresizingMask = [.width, .height]
         chrome.addSubview(imageView)
 
-        crosshair.strokeColor = NSColor.systemRed.cgColor
-        crosshair.fillColor = nil
-        crosshair.lineWidth = 1
-        let mid = size / 2
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: mid - 10, y: mid))
-        path.addLine(to: CGPoint(x: mid + 10, y: mid))
-        path.move(to: CGPoint(x: mid, y: mid - 10))
-        path.addLine(to: CGPoint(x: mid, y: mid + 10))
-        crosshair.path = path
-        chrome.layer?.addSublayer(crosshair)
+        // 准星必须叠在图像之上（旧版加在 layer 上会被 imageView 盖住）
+        reticle.frame = chrome.bounds
+        reticle.autoresizingMask = [.width, .height]
+        chrome.addSubview(reticle)
 
         contentView = chrome
     }
 
     func show(patch: CGImage, near global: CGPoint) {
+        reticle.pixelCount = max(patch.width, 1)
+        reticle.needsDisplay = true
         imageView.image = NSImage(cgImage: patch, size: NSSize(width: size, height: size))
+
         let w = size
         let h = size
         var x = global.x + 20
@@ -361,5 +369,47 @@ final class MagnifierHUD: NSPanel {
 
     func hide() {
         orderOut(nil)
+    }
+}
+
+/// 中心像素框 + 准星（对齐放大后的像素格）。
+private final class MagnifierReticleView: NSView {
+    var pixelCount: Int = 17
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard pixelCount > 0, bounds.width > 0 else { return }
+        let cell = bounds.width / CGFloat(pixelCount)
+        let mid = CGFloat(pixelCount / 2)
+        let pixel = NSRect(x: mid * cell, y: mid * cell, width: cell, height: cell)
+        let cx = pixel.midX
+        let cy = pixel.midY
+
+        let hair = NSBezierPath()
+        hair.move(to: NSPoint(x: 0, y: cy))
+        hair.line(to: NSPoint(x: pixel.minX, y: cy))
+        hair.move(to: NSPoint(x: pixel.maxX, y: cy))
+        hair.line(to: NSPoint(x: bounds.maxX, y: cy))
+        hair.move(to: NSPoint(x: cx, y: 0))
+        hair.line(to: NSPoint(x: cx, y: pixel.minY))
+        hair.move(to: NSPoint(x: cx, y: pixel.maxY))
+        hair.line(to: NSPoint(x: cx, y: bounds.maxY))
+
+        NSColor.black.withAlphaComponent(0.7).setStroke()
+        hair.lineWidth = 2
+        hair.stroke()
+        NSColor.white.setStroke()
+        hair.lineWidth = 1
+        hair.stroke()
+
+        let outline = NSBezierPath(rect: pixel.insetBy(dx: 0.5, dy: 0.5))
+        NSColor.black.setStroke()
+        outline.lineWidth = 2.5
+        outline.stroke()
+        NSColor.systemRed.setStroke()
+        outline.lineWidth = 1.25
+        outline.stroke()
     }
 }
