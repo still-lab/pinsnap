@@ -39,6 +39,11 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 NSApp.terminate(nil)
             }
         }
+        if CommandLine.arguments.contains("--self-test-settings") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.runSettingsSelfTest()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -331,33 +336,71 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         sender.state = AppBootstrap.shared.hotKeysDisabled ? .on : .off
     }
 
-    @objc private func openSettings() { showSettings() }
-    @objc private func openUpgrade() { showUpgrade() }
+    /// 须在 `menu.popUp` 跟踪结束后再弹窗，否则 `makeKeyAndOrderFront` 常被吞掉。
+    @objc private func openSettings() {
+        DispatchQueue.main.async { [weak self] in self?.showSettings() }
+    }
+
+    @objc private func openUpgrade() {
+        DispatchQueue.main.async { [weak self] in self?.showUpgrade() }
+    }
+
     @objc private func quit() { NSApp.terminate(nil) }
 
     private func showSettings() {
         if settingsWindow == nil {
-            let view = SettingsRootView()
-            let hosting = NSHostingController(rootView: view)
+            let hosting = NSHostingController(rootView: SettingsRootView())
             let window = NSWindow(contentViewController: hosting)
             window.title = "PinSnap"
             window.styleMask = [.titled, .closable]
-            window.setContentSize(NSSize(width: 520, height: 360))
+            window.setContentSize(NSSize(width: 560, height: 460))
             settingsWindow = window
         }
-        settingsWindow?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        guard let window = settingsWindow else { return }
+        MenuBarWindowPresenter.shared.present(window)
     }
 
     private func showUpgrade() {
-        let hosting = NSHostingController(rootView: UpgradeView())
-        let window = NSWindow(contentViewController: hosting)
-        window.title = "PinSnap Pro"
-        window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 360, height: 240))
-        upgradeWindow = window
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        if upgradeWindow == nil {
+            let hosting = NSHostingController(rootView: UpgradeView())
+            let window = NSWindow(contentViewController: hosting)
+            window.title = "PinSnap Pro"
+            window.styleMask = [.titled, .closable]
+            window.setContentSize(NSSize(width: 360, height: 240))
+            upgradeWindow = window
+        }
+        guard let window = upgradeWindow else { return }
+        MenuBarWindowPresenter.shared.present(window)
+    }
+
+    /// `--self-test-settings`：断言设置窗能成为可见 key 窗（菜单栏 App 弹窗回归）。
+    private func runSettingsSelfTest() {
+        showSettings()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self, let window = self.settingsWindow else {
+                fputs("SETTINGS_SELF_TEST FAIL window=nil\n", stderr)
+                NSApp.terminate(nil)
+                return
+            }
+            let occluded = !window.occlusionState.contains(.visible)
+            let ok = window.isVisible && window.isKeyWindow && NSApp.isActive && !occluded
+            let line = [
+                "SETTINGS_SELF_TEST",
+                ok ? "PASS" : "FAIL",
+                "visible=\(window.isVisible)",
+                "key=\(window.isKeyWindow)",
+                "active=\(NSApp.isActive)",
+                "occluded=\(occluded)",
+                "policy=\(NSApp.activationPolicy().rawValue)",
+            ].joined(separator: " ")
+            if ok {
+                print(line)
+            } else {
+                fputs(line + "\n", stderr)
+            }
+            fflush(stdout)
+            fflush(stderr)
+            NSApp.terminate(nil)
+        }
     }
 }

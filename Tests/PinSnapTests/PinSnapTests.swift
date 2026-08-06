@@ -166,6 +166,13 @@ final class OverlayDragSessionTests: XCTestCase {
         let result = session.mouseUp(at: CGPoint(x: 51, y: 50))
         XCTAssertEqual(result, .window(window))
     }
+
+    /// 首击若只激活窗口、未送达 mouseDown（缺 acceptsFirstMouse），整段拖选应无效。
+    func testDragWithoutMouseDownSelectsNothing() {
+        var session = OverlayDragSession()
+        XCTAssertNil(session.mouseDragged(at: CGPoint(x: 180, y: 160)))
+        XCTAssertEqual(session.mouseUp(at: CGPoint(x: 200, y: 180)), .none)
+    }
 }
 
 final class ScrollStitchTests: XCTestCase {

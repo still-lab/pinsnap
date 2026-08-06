@@ -100,8 +100,13 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             panels.append(panel)
         }
         NSApp.activate(ignoringOtherApps: true)
-        panels.first?.makeKeyAndOrderFront(nil)
-        panels.first.flatMap { ($0.contentView as? OverlayView) }?.window?.makeFirstResponder(panels.first?.contentView)
+        // 优先把鼠标所在屏的遮罩设为 key，避免副屏首拖只激活窗口、选区无效。
+        let mouse = NSEvent.mouseLocation
+        let keyPanel = panels.first { $0.frame.contains(mouse) } ?? panels.first
+        keyPanel?.makeKeyAndOrderFront(nil)
+        if let view = keyPanel?.contentView as? OverlayView {
+            keyPanel?.makeFirstResponder(view)
+        }
         installEscapeHatches()
         if let initialSelection, let locked = Self.resolvedSelection(initialSelection, in: frames) {
             selection = locked
@@ -1254,6 +1259,9 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { false }
 
+    /// 非 key 窗口上的首击也要进 mouseDown；否则首拖只激活遮罩，看起来像拖选无效。
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     func currentText() -> String { textField?.stringValue ?? "" }
 
     func installOCR(
@@ -1855,12 +1863,19 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        window?.makeKey()
+        makeFirstResponderUnlessEditing()
         let p = global(from: convert(event.locationInWindow, from: nil))
         if event.clickCount >= 2 {
             controller?.mouseDoubleClick(at: p)
         } else {
             controller?.mouseDown(at: p)
         }
+    }
+
+    private func makeFirstResponderUnlessEditing() {
+        guard textField == nil, ocrOverlay == nil else { return }
+        window?.makeFirstResponder(self)
     }
 
     override func mouseDragged(with event: NSEvent) {
