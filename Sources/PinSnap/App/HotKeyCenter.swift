@@ -2,7 +2,7 @@ import AppKit
 import Carbon
 import Foundation
 
-/// 全局热键。默认 F1 截图 / F1 连击上次区域 / ⌘T 延时 / F3 贴图 / ⌘H 隐藏 / ⌘⇧H 显示。
+/// 全局热键。绑定来自 `HotKeyPreferences`；截图键连击派发上次区域。
 @MainActor
 public final class HotKeyCenter {
     public enum Action: UInt32 {
@@ -14,28 +14,19 @@ public final class HotKeyCenter {
         case delayedCapture = 6
     }
 
-    /// F1 单击与连击的判定窗。
-    private static let f1DoubleTapWindow: TimeInterval = 0.35
+    /// 单击与连击的判定窗。
+    private static let doubleTapWindow: TimeInterval = 0.35
 
     public var onAction: ((Action) -> Void)?
     private var hotKeys: [EventHotKeyRef?] = []
     private var handler: EventHandlerRef?
-    private var pendingF1WorkItem: DispatchWorkItem?
+    private var pendingCaptureWorkItem: DispatchWorkItem?
     private static weak var shared: HotKeyCenter?
-
-    /// 内部注册 id（不直接等于对外 Action；F1 经连击状态机再派发）。
-    private enum RegisteredID: UInt32 {
-        case f1 = 1
-        case f3 = 2
-        case hidePins = 3
-        case showPins = 4
-        case delayedCapture = 5
-    }
 
     public init() {}
 
     public func register() throws {
-        cancelPendingF1()
+        cancelPendingCapture()
         HotKeyCenter.shared = self
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let handler: EventHandlerUPP = { (_, event, _) -> OSStatus in
@@ -56,16 +47,28 @@ public final class HotKeyCenter {
         }
         InstallEventHandler(GetApplicationEventTarget(), handler, 1, &eventType, nil, &self.handler)
 
-        try install(id: RegisteredID.f1.rawValue, key: UInt32(kVK_F1), mods: 0)
-        try install(id: RegisteredID.f3.rawValue, key: UInt32(kVK_F3), mods: 0)
-        try install(id: RegisteredID.hidePins.rawValue, key: UInt32(kVK_ANSI_H), mods: UInt32(cmdKey))
-        try install(id: RegisteredID.showPins.rawValue, key: UInt32(kVK_ANSI_H), mods: UInt32(cmdKey + shiftKey))
-        try install(id: RegisteredID.delayedCapture.rawValue, key: UInt32(kVK_ANSI_T), mods: UInt32(cmdKey))
-        PinSnapLog.app.info("Hotkeys registered F1 / F1×2 / ⌘T / F3 / ⌘H / ⌘⇧H")
+        let prefs = HotKeyPreferences.shared
+        let conflicts = prefs.conflictedSlots()
+        var failed: Set<HotKeySlot> = []
+        var installedLabels: [String] = []
+
+        for slot in HotKeySlot.globalSlots {
+            if conflicts.contains(slot) { continue }
+            let chord = prefs.chord(for: slot)
+            do {
+                try install(id: slot.registrationID, key: chord.keyCode, mods: chord.carbonModifiers)
+                installedLabels.append("\(slot.title)=\(chord.displayString)")
+            } catch {
+                failed.insert(slot)
+                PinSnapLog.app.error("hotkey register \(slot.rawValue): \(error.localizedDescription)")
+            }
+        }
+        prefs.markRegistrationFailed(failed)
+        PinSnapLog.app.info("Hotkeys registered \(installedLabels.joined(separator: " / "))")
     }
 
     public func unregister() {
-        cancelPendingF1()
+        cancelPendingCapture()
         for ref in hotKeys {
             if let ref { UnregisterEventHotKey(ref) }
         }
@@ -77,10 +80,11 @@ public final class HotKeyCenter {
     }
 
     private func handleRegistered(id: UInt32) {
-        switch RegisteredID(rawValue: id) {
-        case .f1:
-            handleF1()
-        case .f3:
+        guard let slot = HotKeySlot.globalSlots.first(where: { $0.registrationID == id }) else { return }
+        switch slot {
+        case .capture:
+            handleCaptureTap()
+        case .paste:
             onAction?(.paste)
         case .hidePins:
             onAction?(.hidePins)
@@ -88,29 +92,29 @@ public final class HotKeyCenter {
             onAction?(.showPins)
         case .delayedCapture:
             onAction?(.delayedCapture)
-        case .none:
+        case .overlayQuickSave, .overlaySaveAs, .overlayColorCopy, .overlayColorToggle:
             break
         }
     }
 
-    private func handleF1() {
-        if pendingF1WorkItem != nil {
-            cancelPendingF1()
+    private func handleCaptureTap() {
+        if pendingCaptureWorkItem != nil {
+            cancelPendingCapture()
             onAction?(.captureLastRegion)
             return
         }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.pendingF1WorkItem = nil
+            self.pendingCaptureWorkItem = nil
             self.onAction?(.capture)
         }
-        pendingF1WorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.f1DoubleTapWindow, execute: work)
+        pendingCaptureWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.doubleTapWindow, execute: work)
     }
 
-    private func cancelPendingF1() {
-        pendingF1WorkItem?.cancel()
-        pendingF1WorkItem = nil
+    private func cancelPendingCapture() {
+        pendingCaptureWorkItem?.cancel()
+        pendingCaptureWorkItem = nil
     }
 
     private func install(id: UInt32, key: UInt32, mods: UInt32) throws {

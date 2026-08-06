@@ -6,7 +6,7 @@ import Foundation
 public final class AppBootstrap {
     public static let shared = AppBootstrap()
 
-    private static let hotKeysDisabledKey = "pinsnap.hotKeysDisabled"
+    public static let hotKeysDisabledDefaultsKey = "pinsnap.hotKeysDisabled"
 
     public private(set) lazy var gate = FeatureGate.shared
     public private(set) lazy var pins = PinStore(gate: gate)
@@ -22,14 +22,14 @@ public final class AppBootstrap {
 
     /// `true` = 全局快捷键关闭（菜单「禁用快捷键」勾选）。默认关闭快捷键，菜单功能仍可用。
     public private(set) var hotKeysDisabled: Bool {
-        didSet { UserDefaults.standard.set(hotKeysDisabled, forKey: Self.hotKeysDisabledKey) }
+        didSet { UserDefaults.standard.set(hotKeysDisabled, forKey: Self.hotKeysDisabledDefaultsKey) }
     }
 
     private init() {
-        if UserDefaults.standard.object(forKey: Self.hotKeysDisabledKey) == nil {
+        if UserDefaults.standard.object(forKey: Self.hotKeysDisabledDefaultsKey) == nil {
             hotKeysDisabled = true
         } else {
-            hotKeysDisabled = UserDefaults.standard.bool(forKey: Self.hotKeysDisabledKey)
+            hotKeysDisabled = UserDefaults.standard.bool(forKey: Self.hotKeysDisabledDefaultsKey)
         }
     }
 
@@ -57,6 +57,13 @@ public final class AppBootstrap {
                 self.coordinator.showAllPins()
             }
         }
+        NotificationCenter.default.addObserver(
+            forName: HotKeyPreferences.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.reloadHotKeys() }
+        }
         applyHotKeyRegistration()
         Task { await StoreClient.shared.refreshEntitlements() }
         // DEBUG 默认 Free，便于验 ≤3；升级页购买失败时可调试解锁
@@ -74,6 +81,10 @@ public final class AppBootstrap {
 
     public func toggleHotKeysDisabled() {
         setHotKeysDisabled(!hotKeysDisabled)
+    }
+
+    public func reloadHotKeys() {
+        applyHotKeyRegistration()
     }
 
     private func applyHotKeyRegistration() {

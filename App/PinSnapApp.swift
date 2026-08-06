@@ -179,18 +179,19 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.autoenablesItems = false
         menu.delegate = self
 
-        menu.addItem(actionItem("截图", #selector(capture), shortcut: "F1"))
-        menu.addItem(actionItem("延时截图", #selector(captureDelayed), shortcut: "⌘T"))
-        let lastRegion = actionItem("上次区域", #selector(captureLastRegion), shortcut: "F1×2")
+        let prefs = HotKeyPreferences.shared
+        menu.addItem(actionItem("截图", #selector(capture), shortcut: prefs.displayString(for: .capture)))
+        menu.addItem(actionItem("延时截图", #selector(captureDelayed), shortcut: prefs.displayString(for: .delayedCapture)))
+        let lastRegion = actionItem("上次区域", #selector(captureLastRegion), shortcut: prefs.lastRegionDisplayString)
         lastRegion.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
         menu.addItem(lastRegion)
         menu.addItem(actionItem("截图并复制", #selector(captureAutoCopy)))
         menu.addItem(actionItem("截图并保存", #selector(captureAutoSave)))
         menu.addItem(.separator())
 
-        menu.addItem(actionItem("贴图", #selector(paste), shortcut: "F3"))
-        menu.addItem(actionItem("隐藏贴图", #selector(hidePins), shortcut: "⌘H"))
-        menu.addItem(actionItem("显示贴图", #selector(showPins), shortcut: "⌘⇧H"))
+        menu.addItem(actionItem("贴图", #selector(paste), shortcut: prefs.displayString(for: .paste)))
+        menu.addItem(actionItem("隐藏贴图", #selector(hidePins), shortcut: prefs.displayString(for: .hidePins)))
+        menu.addItem(actionItem("显示贴图", #selector(showPins), shortcut: prefs.displayString(for: .showPins)))
         menu.addItem(.separator())
 
         let disableHotKeys = NSMenuItem(
@@ -212,12 +213,26 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshStatusMenu(_ menu: NSMenu) {
+        let prefs = HotKeyPreferences.shared
         for item in menu.items {
-            if item.action == #selector(captureLastRegion) {
+            switch item.action {
+            case #selector(capture):
+                item.attributedTitle = Self.menuLabeledTitle("截图", shortcut: prefs.displayString(for: .capture))
+            case #selector(captureDelayed):
+                item.attributedTitle = Self.menuLabeledTitle("延时截图", shortcut: prefs.displayString(for: .delayedCapture))
+            case #selector(captureLastRegion):
+                item.attributedTitle = Self.menuLabeledTitle("上次区域", shortcut: prefs.lastRegionDisplayString)
                 item.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
-            }
-            if item.action == #selector(toggleDisableHotKeys(_:)) {
+            case #selector(paste):
+                item.attributedTitle = Self.menuLabeledTitle("贴图", shortcut: prefs.displayString(for: .paste))
+            case #selector(hidePins):
+                item.attributedTitle = Self.menuLabeledTitle("隐藏贴图", shortcut: prefs.displayString(for: .hidePins))
+            case #selector(showPins):
+                item.attributedTitle = Self.menuLabeledTitle("显示贴图", shortcut: prefs.displayString(for: .showPins))
+            case #selector(toggleDisableHotKeys(_:)):
                 item.state = AppBootstrap.shared.hotKeysDisabled ? .on : .off
+            default:
+                break
             }
         }
     }

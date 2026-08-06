@@ -174,7 +174,7 @@ final class ColorSampleHUD: NSPanel {
     private let swatch = NSView()
     private let hexLabel = NSTextField(labelWithString: "")
     private let rgbLabel = NSTextField(labelWithString: "")
-    private let hintLabel = NSTextField(labelWithString: "C 复制 · Tab 切换")
+    private let hintLabel = NSTextField(labelWithString: "")
     private var activeFormat: ColorValueFormat = .current
     private var lastColor: NSColor?
 
@@ -250,6 +250,8 @@ final class ColorSampleHUD: NSPanel {
         }
         lastColor = color
         swatch.layer?.backgroundColor = color.cgColor
+        let prefs = HotKeyPreferences.shared
+        hintLabel.stringValue = "\(prefs.displayString(for: .overlayColorCopy)) 复制 · \(prefs.displayString(for: .overlayColorToggle)) 切换"
         refreshLabels()
         let w: CGFloat = 168
         let h: CGFloat = 72

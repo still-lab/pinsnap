@@ -248,3 +248,25 @@ private extension CGImage {
         return ctx.makeImage()
     }
 }
+
+final class HotKeyPreferencesTests: XCTestCase {
+    func testDefaultDisplayStrings() {
+        XCTAssertEqual(HotKeyPreferences.defaults[.capture]?.displayString, "F1")
+        XCTAssertEqual(HotKeyPreferences.defaults[.delayedCapture]?.displayString, "⌘T")
+        XCTAssertEqual(HotKeyPreferences.defaults[.overlayQuickSave]?.displayString, "⌘S")
+        XCTAssertEqual(HotKeyPreferences.defaults[.overlaySaveAs]?.displayString, "⇧⌘S")
+        XCTAssertEqual(HotKeyPreferences.defaults[.showPins]?.displayString, "⇧⌘H")
+    }
+
+    @MainActor
+    func testConflictWhenTwoSlotsShareChord() {
+        let prefs = HotKeyPreferences.shared
+        prefs.resetToDefaults()
+        prefs.setChord(prefs.chord(for: .capture), for: .paste)
+        let conflicts = prefs.conflictedSlots()
+        XCTAssertTrue(conflicts.contains(.capture))
+        XCTAssertTrue(conflicts.contains(.paste))
+        prefs.resetToDefaults()
+        XCTAssertTrue(prefs.conflictedSlots().isEmpty)
+    }
+}

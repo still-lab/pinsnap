@@ -181,13 +181,15 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             let cmd = event.modifierFlags.contains(.command)
             let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
-            // 取色中：C 复制 · Tab 切换格式
-            if self.isColorPicking, !cmd {
-                if event.keyCode == 8 {
+            let prefs = HotKeyPreferences.shared
+
+            // 取色中：可改绑复制 / 切换格式
+            if self.isColorPicking {
+                if prefs.chord(for: .overlayColorCopy).matches(event) {
                     self.copySampledColor()
                     return nil
                 }
-                if event.keyCode == 48 {
+                if prefs.chord(for: .overlayColorToggle).matches(event) {
                     self.colorHUD?.toggleFormat()
                     return nil
                 }
@@ -214,19 +216,21 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                 }
             }
 
+            if prefs.chord(for: .overlayQuickSave).matches(event) {
+                self.commitQuickSave()
+                return nil
+            }
+            if prefs.chord(for: .overlaySaveAs).matches(event) {
+                self.commitSave()
+                return nil
+            }
+
             switch event.keyCode {
             case 36, 76:
                 self.commitCopy()
                 return nil
             case 8 where cmd:
                 self.commitCopy()
-                return nil
-            case 1 where cmd:
-                if event.modifierFlags.contains(.shift) {
-                    self.commitSave()
-                } else {
-                    self.commitQuickSave()
-                }
                 return nil
             case 6 where cmd:
                 if event.modifierFlags.contains(.shift) {
