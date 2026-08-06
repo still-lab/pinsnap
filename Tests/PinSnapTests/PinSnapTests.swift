@@ -196,13 +196,119 @@ final class ScrollStitchTests: XCTestCase {
     }
 
     func testMeasureAdvanceFindsKnownScroll() throws {
-        let band = try XCTUnwrap(Self.makeNoise(width: 64, height: 50, seed: 7))
+        let band = try XCTUnwrap(Self.makeNoise(width: 64, height: 80, seed: 7))
         let aPad = try XCTUnwrap(Self.makeNoise(width: 64, height: 40, seed: 1))
         let bPad = try XCTUnwrap(Self.makeNoise(width: 64, height: 40, seed: 2))
         let a = try XCTUnwrap(Self.stackVertically([aPad, band]))
         let b = try XCTUnwrap(Self.stackVertically([band, bPad]))
         let advance = try XCTUnwrap(ScrollStitcher.measureAdvance(previous: a, next: b, hint: 40))
         XCTAssertEqual(Double(advance), 40, accuracy: 6)
+    }
+
+    /// 快滑：滚轮 hint 常远小于真实内容推进；不得用 hint 把实测 advance 压矮，否则叠字。
+    func testMeasureAdvanceIgnoresLowballHint() throws {
+        let trueAdvance = 72
+        let (a, b) = try Self.makeScrolledPair(width: 80, height: 180, advance: trueAdvance, seed: 41)
+        // 快甩时 pending 常只有十几像素，真实视口已滚了 70+
+        let advance = try XCTUnwrap(ScrollStitcher.measureAdvance(previous: a, next: b, hint: 16))
+        XCTAssertEqual(Double(advance), Double(trueAdvance), accuracy: 8)
+        XCTAssertGreaterThan(advance, 40, "must not clamp to lowball wheel hint")
+    }
+
+    /// 快滑大步进：真实推进接近半高时，不得低估成小步进（叠字根因）。
+    func testMeasureAdvanceHandlesLargeStepWithoutUnderestimate() throws {
+        let trueAdvance = 90 // 200 高的 45%，超过旧 40% 软顶
+        let (a, b) = try Self.makeScrolledPair(width: 96, height: 200, advance: trueAdvance, seed: 55)
+        let advance = try XCTUnwrap(ScrollStitcher.measureAdvance(previous: a, next: b, hint: 0))
+        XCTAssertEqual(Double(advance), Double(trueAdvance), accuracy: 10)
+        // 若低估 >20px，append 后会出现明显重复条带
+        XCTAssertGreaterThanOrEqual(advance, trueAdvance - 12)
+    }
+
+    /// 端到端：低估 advance 再 append → 画布底部与上一帧重叠区重复（用户所见叠字）。
+    func testAppendWithUnderestimatedAdvanceDuplicatesContent() throws {
+        let trueAdvance = 80
+        let (a, b) = try Self.makeScrolledPair(width: 64, height: 160, advance: trueAdvance, seed: 77)
+        let measured = try XCTUnwrap(ScrollStitcher.measureAdvance(previous: a, next: b, hint: 12))
+        let canvas = try XCTUnwrap(ScrollStitcher.appendByAdvance(canvas: a, nextFrame: b, advance: measured))
+        // 正确高度 = h + trueAdvance；若 measured 被 hint 压矮，画布偏矮且含重复
+        XCTAssertEqual(Double(canvas.height), Double(a.height + trueAdvance), accuracy: 14)
+        XCTAssertGreaterThanOrEqual(measured, trueAdvance - 12)
+    }
+
+    /// 快滑丢中间帧：A→C 跨度过大测不到，但经 B 串联应能追赶上（否则只能滑回去才截）。
+    func testChainAppendRecoversViaIntermediateFrame() throws {
+        let w = 72
+        let viewH = 120
+        let step = 55 // 单步可测；两步 110 ≈ 92% 高，直连 A→C 会失败
+        let content = try XCTUnwrap(Self.makeNoise(width: w, height: viewH + step * 2, seed: 91))
+        let a = try XCTUnwrap(Self.cropWindow(content, y: 0, height: viewH))
+        let b = try XCTUnwrap(Self.cropWindow(content, y: step, height: viewH))
+        let c = try XCTUnwrap(Self.cropWindow(content, y: step * 2, height: viewH))
+
+        XCTAssertNil(
+            ScrollStitcher.measureAdvance(previous: a, next: c, hint: 0),
+            "direct A→C should be too far — reproduces fast-scroll stall"
+        )
+
+        let result = try XCTUnwrap(
+            ScrollStitcher.chainAppend(canvas: a, lastFrame: a, incoming: [b, c])
+        )
+        XCTAssertEqual(result.acceptedCount, 2)
+        XCTAssertEqual(Double(result.totalAdvance), Double(step * 2), accuracy: 16)
+        XCTAssertEqual(Double(result.canvas.height), Double(viewH + step * 2), accuracy: 16)
+    }
+
+    /// 无中间帧时远跳不应瞎拼（宁可不增长，也不叠错）。
+    func testChainAppendSkipsUnmatchableFarJump() throws {
+        let (a, _) = try Self.makeScrolledPair(width: 64, height: 100, advance: 40, seed: 11)
+        let (c, _) = try Self.makeScrolledPair(width: 64, height: 100, advance: 40, seed: 99)
+        let result = ScrollStitcher.chainAppend(canvas: a, lastFrame: a, incoming: [c])
+        XCTAssertTrue(result == nil || result?.acceptedCount == 0)
+    }
+
+    /// 滚轮来回：先下后上再下，画布高度不应把同一段内容叠两遍。
+    func testDownUpDownDoesNotDuplicateContent() throws {
+        let w = 64
+        let viewH = 100
+        let step = 36
+        let content = try XCTUnwrap(Self.makeNoise(width: w, height: viewH + step * 2, seed: 17))
+        let a = try XCTUnwrap(Self.cropWindow(content, y: 0, height: viewH))
+        let b = try XCTUnwrap(Self.cropWindow(content, y: step, height: viewH))
+        let c = try XCTUnwrap(Self.cropWindow(content, y: step * 2, height: viewH))
+
+        // A → B（下）→ A（上）→ B（下）
+        let r1 = try XCTUnwrap(ScrollStitcher.chainAppend(canvas: a, lastFrame: a, incoming: [b]))
+        XCTAssertEqual(r1.acceptedCount, 1)
+        let afterUp = try XCTUnwrap(
+            ScrollStitcher.chainAppend(canvas: r1.canvas, lastFrame: r1.lastFrame, incoming: [a])
+        )
+        // 上滑应裁回，高度回到首帧附近
+        XCTAssertEqual(Double(afterUp.canvas.height), Double(viewH), accuracy: 8)
+        let r2 = try XCTUnwrap(
+            ScrollStitcher.chainAppend(canvas: afterUp.canvas, lastFrame: afterUp.lastFrame, incoming: [b, c])
+        )
+        XCTAssertEqual(Double(r2.canvas.height), Double(viewH + step * 2), accuracy: 16)
+    }
+
+    /// 上滑相对上一帧：不得增长画布。
+    func testUpwardScrollDoesNotGrowCanvas() throws {
+        let (a, b) = try Self.makeScrolledPair(width: 64, height: 120, advance: 40, seed: 5)
+        // b 相对 a 是下滑；反过来 a 相对 b 是上滑
+        let grown = try XCTUnwrap(ScrollStitcher.appendByAdvance(canvas: a, nextFrame: b, advance: 40))
+        let result = try XCTUnwrap(
+            ScrollStitcher.chainAppend(canvas: grown, lastFrame: b, incoming: [a])
+        )
+        XCTAssertLessThanOrEqual(result.canvas.height, grown.height)
+        XCTAssertEqual(Double(result.canvas.height), Double(a.height), accuracy: 8)
+    }
+
+    /// 画布底部已有相同条带时，append 必须拒绝（防重叠）。
+    func testAppendRejectsStripAlreadyAtCanvasBottom() throws {
+        let (a, b) = try Self.makeScrolledPair(width: 64, height: 120, advance: 40, seed: 8)
+        let once = try XCTUnwrap(ScrollStitcher.appendByAdvance(canvas: a, nextFrame: b, advance: 40))
+        let twice = ScrollStitcher.appendByAdvance(canvas: once, nextFrame: b, advance: 40)
+        XCTAssertNil(twice, "duplicate bottom strip must be rejected")
     }
 
     func testAppendByAdvanceGrowsByExactPixels() throws {
@@ -396,6 +502,31 @@ final class ScrollStitchTests: XCTestCase {
             i += 4
         }
         return n > 0 ? sum / n : 0
+    }
+
+    /// 构造已知垂直推进的两帧：共用噪声内容带，精确 advance。
+    private static func makeScrolledPair(
+        width: Int,
+        height: Int,
+        advance: Int,
+        seed: UInt64
+    ) throws -> (CGImage, CGImage) {
+        precondition(advance > 0 && advance < height)
+        let overlap = height - advance
+        let shared = try XCTUnwrap(makeNoise(width: width, height: overlap, seed: seed))
+        let topOnly = try XCTUnwrap(makeNoise(width: width, height: advance, seed: seed &+ 100))
+        let bottomOnly = try XCTUnwrap(makeNoise(width: width, height: advance, seed: seed &+ 200))
+        let a = try XCTUnwrap(stackVertically([topOnly, shared]))
+        let b = try XCTUnwrap(stackVertically([shared, bottomOnly]))
+        XCTAssertEqual(a.height, height)
+        XCTAssertEqual(b.height, height)
+        return (a, b)
+    }
+
+    /// 从长图裁出视口窗口（y=0 为顶）。
+    private static func cropWindow(_ image: CGImage, y: Int, height: Int) -> CGImage? {
+        guard y >= 0, height > 0, y + height <= image.height else { return nil }
+        return image.cropping(to: CGRect(x: 0, y: y, width: image.width, height: height).integral)
     }
 
     private static func makeNoise(width: Int, height: Int, seed: UInt64) -> CGImage? {

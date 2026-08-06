@@ -6,7 +6,7 @@ import Vision
 /// 实时：滚轮触发采帧 + `measureAdvance` 条带测偏移 + `appendByAdvance`。
 public enum ScrollStitcher {
     public static let maxOutputHeight = 32_768
-    public static let maxFrames = 80
+    public static let maxFrames = 240
     public static let minAdvancePixels = 8
     public static let defaultOverlapHint = 80
     public static let maxHorizontalDrift = 6
@@ -93,7 +93,8 @@ public enum ScrollStitcher {
     }
 
     /// 实测两帧内容上移了多少像素（灰度 row0=顶）。
-    /// 用上一帧近底部条带在下一帧里找位置；`hint` 仅缩小搜索范围。
+    /// 双条带共识 + 次优分差。`hint` 保留兼容，**不用作上限**
+    /// （快滑时滚轮 pending 常远小于真推进，压低会产生叠字）。
     public static func measureAdvance(
         previous: CGImage,
         next: CGImage,
@@ -104,7 +105,7 @@ public enum ScrollStitcher {
               previous.height > 48
         else { return nil }
 
-        let maxW = 160
+        let maxW = 220
         let workPrev: CGImage
         let workNext: CGImage
         let scale: CGFloat
@@ -127,79 +128,263 @@ public enum ScrollStitcher {
         else { return nil }
 
         let h = prev.height
-        let probeH = min(32, max(16, h / 12))
-        let probeY = h - probeH - max(8, h / 30)
-        guard probeY > 8 else { return nil }
+        let probeH = min(36, max(18, h / 10))
+        let probeY1 = h - probeH - max(6, h / 40)
+        let probeY2 = probeY1 - probeH - max(4, h / 50)
+        guard probeY1 > 8 else { return nil }
 
         let minAdv = max(2, h / 80)
-        let maxAdv = h / 2
-        let hintWork = scale > 1 ? Int((CGFloat(hint) / scale).rounded()) : hint
-        let lo: Int
-        let hi: Int
-        if hintWork >= minAdv {
-            lo = max(minAdv, hintWork - max(24, hintWork / 2))
-            hi = min(maxAdv, hintWork + max(24, hintWork / 2))
-        } else {
-            lo = minAdv
-            hi = maxAdv
-        }
+        // 允许接近 60% 的单步（快滑帧间常超过半高的一半）；仍须留给条带可匹配的重叠
+        let maxAdv = min(probeY1 - 2, (h * 3) / 5)
+        let lo = minAdv
+        let hi = maxAdv
         guard lo <= hi else { return nil }
+        // hint 仅保留 API；快滑时 pending 常远小于真推进，绝不用作上限
+        _ = hint
 
+        let stepX = max(1, prev.width / 72)
         var bestAdv = 0
         var bestMAD = Double.infinity
-        let stepX = max(1, prev.width / 64)
+        var secondMAD = Double.infinity
 
         for advance in lo...hi {
-            let ny = probeY - advance
-            if ny < 0 { continue }
-            var sum = 0.0
-            var n = 0.0
-            for dy in 0..<probeH {
-                let py = probeY + dy
-                let qy = ny + dy
-                var x = 0
-                while x < prev.width {
-                    sum += abs(Double(prev.pixel(x, py)) - Double(nxt.pixel(x, qy)))
-                    n += 1
-                    x += stepX
+            let mad1 = probeMAD(
+                prev: prev, next: nxt,
+                probeY: probeY1, probeH: probeH,
+                advance: advance, stepX: stepX
+            )
+            guard mad1.isFinite, mad1 <= 22 else { continue }
+            let mad: Double
+            if probeY2 > advance {
+                let mad2 = probeMAD(
+                    prev: prev, next: nxt,
+                    probeY: probeY2, probeH: probeH,
+                    advance: advance, stepX: stepX
+                )
+                // 大步进时第二带可能出界；能算则要求共识，否则单带也可
+                if mad2.isFinite {
+                    if mad2 > 22 { continue }
+                    mad = (mad1 + mad2) * 0.5
+                } else {
+                    mad = mad1
                 }
+            } else {
+                mad = mad1
             }
-            let mad = sum / max(n, 1)
             if mad < bestMAD {
+                secondMAD = bestMAD
                 bestMAD = mad
                 bestAdv = advance
+            } else if mad < secondMAD {
+                secondMAD = mad
             }
         }
 
-        // 匹配太差：说明几乎没滚或纹理不够
-        guard bestMAD < 28, bestAdv >= minAdv else { return nil }
+        guard bestMAD < 18, bestAdv >= minAdv else { return nil }
+        if secondMAD.isFinite, (secondMAD - bestMAD) < 1.2, bestMAD > 6 {
+            return nil
+        }
 
-        // 在最佳附近再收一圈，偏向略小的 advance，减少叠字
+        // 近旁略偏保守，但不超过 4px，避免把正确大步进压成叠字
         var chosen = bestAdv
-        let refineLo = max(minAdv, bestAdv - 6)
+        let refineLo = max(minAdv, bestAdv - 4)
         for advance in refineLo..<bestAdv {
-            let ny = probeY - advance
-            if ny < 0 { continue }
-            var sum = 0.0
-            var n = 0.0
-            for dy in 0..<probeH {
-                var x = 0
-                while x < prev.width {
-                    sum += abs(Double(prev.pixel(x, probeY + dy)) - Double(nxt.pixel(x, ny + dy)))
-                    n += 1
-                    x += stepX
-                }
+            let mad1 = probeMAD(
+                prev: prev, next: nxt,
+                probeY: probeY1, probeH: probeH,
+                advance: advance, stepX: stepX
+            )
+            guard mad1.isFinite else { continue }
+            var mad = mad1
+            if probeY2 > advance {
+                let mad2 = probeMAD(
+                    prev: prev, next: nxt,
+                    probeY: probeY2, probeH: probeH,
+                    advance: advance, stepX: stepX
+                )
+                if mad2.isFinite { mad = (mad1 + mad2) * 0.5 }
             }
-            if sum / max(n, 1) <= bestMAD + 1.5 {
+            if mad <= bestMAD + 0.8 {
                 chosen = advance
             }
         }
 
         let full = max(minAdvancePixels, Int((CGFloat(chosen) * scale).rounded()))
-        return min(full, previous.height / 2)
+        return min(full, previous.height * 3 / 5)
+    }
+
+    public struct ChainAppendResult: Sendable {
+        public var canvas: CGImage
+        public var lastFrame: CGImage
+        public var acceptedFrames: [CGImage]
+        public var totalAdvance: Int
+        /// 尚未接到 `lastFrame` 上的尾部桥接帧，调用方应保留。
+        public var remainder: [CGImage]
+        /// 含上滑裁底 / 同步 last，即使未增长也要写回。
+        public var didChange: Bool
+
+        public var acceptedCount: Int { acceptedFrames.count }
+
+        public init(
+            canvas: CGImage,
+            lastFrame: CGImage,
+            acceptedFrames: [CGImage],
+            totalAdvance: Int,
+            remainder: [CGImage],
+            didChange: Bool
+        ) {
+            self.canvas = canvas
+            self.lastFrame = lastFrame
+            self.acceptedFrames = acceptedFrames
+            self.totalAdvance = totalAdvance
+            self.remainder = remainder
+            self.didChange = didChange
+        }
+    }
+
+    /// 按顺序把 `incoming` 接到画布上；中间帧可作桥。
+    /// 仅下滑增长；上滑则裁掉对应底部并同步 last，避免来回滚重叠。
+    public static func chainAppend(
+        canvas: CGImage,
+        lastFrame: CGImage,
+        incoming: [CGImage]
+    ) -> ChainAppendResult? {
+        guard !incoming.isEmpty else { return nil }
+
+        var ref = lastFrame
+        var cv = canvas
+        var accepted: [CGImage] = []
+        var totalAdvance = 0
+        var didChange = false
+        var frames = incoming.compactMap { fitted($0, toMatch: lastFrame) }
+        guard !frames.isEmpty else { return nil }
+
+        // 队头失步：找第一帧能下滑接到 ref 的
+        if signedScrollDelta(previous: ref, next: frames[0]).map({ $0 > 0 }) != true,
+           let idx = frames.indices.first(where: {
+               guard looksDifferent(ref, frames[$0], threshold: 2.5) else { return false }
+               guard let d = signedScrollDelta(previous: ref, next: frames[$0]), d >= minAdvancePixels
+               else { return false }
+               return true
+           }),
+           idx > 0
+        {
+            frames = Array(frames[idx...])
+        }
+
+        var remainder: [CGImage] = []
+        var i = 0
+        while i < frames.count {
+            let frame = frames[i]
+            if !looksDifferent(ref, frame, threshold: 2.5) {
+                i += 1
+                continue
+            }
+            guard let delta = signedScrollDelta(previous: ref, next: frame) else {
+                remainder = Array(frames[i...])
+                break
+            }
+            if delta < 0 {
+                let up = -delta
+                let maxTrim = max(0, cv.height - frame.height)
+                let trimBy = min(up, maxTrim)
+                if trimBy > 0, let trimmedCanvas = trimBottom(cv, by: trimBy) {
+                    cv = trimmedCanvas
+                }
+                ref = frame
+                didChange = true
+                i += 1
+                continue
+            }
+            if let next = appendByAdvance(canvas: cv, nextFrame: frame, advance: delta),
+               next.height > cv.height {
+                cv = next
+                ref = frame
+                accepted.append(frame)
+                totalAdvance += delta
+                didChange = true
+                i += 1
+                continue
+            }
+            if isLikelyDuplicateAppend(canvas: cv, next: frame, advance: delta) {
+                ref = frame
+                didChange = true
+                i += 1
+                continue
+            }
+            remainder = Array(frames[i...])
+            break
+        }
+
+        if !didChange {
+            return ChainAppendResult(
+                canvas: canvas,
+                lastFrame: lastFrame,
+                acceptedFrames: [],
+                totalAdvance: 0,
+                remainder: remainder.isEmpty ? frames : remainder,
+                didChange: false
+            )
+        }
+        return ChainAppendResult(
+            canvas: cv,
+            lastFrame: ref,
+            acceptedFrames: accepted,
+            totalAdvance: totalAdvance,
+            remainder: remainder,
+            didChange: true
+        )
+    }
+
+    private static func isLikelyDuplicateAppend(
+        canvas: CGImage,
+        next: CGImage,
+        advance: Int
+    ) -> Bool {
+        let added = min(advance, next.height - 1)
+        guard added > 0 else { return false }
+        let srcY = next.height - added
+        guard let strip = next.cropping(
+            to: CGRect(x: 0, y: srcY, width: next.width, height: added).integral
+        ) else { return false }
+        return canvasBottomMatches(canvas, strip: strip)
+    }
+
+    private static func fitted(_ image: CGImage, toMatch ref: CGImage) -> CGImage? {
+        if image.width == ref.width, image.height == ref.height { return image }
+        guard let scaled = rescaleImage(image, toWidth: ref.width),
+              scaled.height == ref.height
+        else { return nil }
+        return scaled
+    }
+
+    private static func probeMAD(
+        prev: GrayImage,
+        next: GrayImage,
+        probeY: Int,
+        probeH: Int,
+        advance: Int,
+        stepX: Int
+    ) -> Double {
+        let ny = probeY - advance
+        if ny < 0 { return .infinity }
+        var sum = 0.0
+        var n = 0.0
+        for dy in 0..<probeH {
+            let py = probeY + dy
+            let qy = ny + dy
+            var x = 0
+            while x < prev.width {
+                sum += abs(Double(prev.pixel(x, py)) - Double(next.pixel(x, qy)))
+                n += 1
+                x += stepX
+            }
+        }
+        return sum / max(n, 1)
     }
 
     /// 按实测推进拼接：从下一帧底部取 `advance` 像素接到画布下。
+    /// 若条带已与画布底部相同（滚轮回摆/重复帧），拒绝拼接以防重叠。
     public static func appendByAdvance(
         canvas: CGImage,
         nextFrame: CGImage,
@@ -221,6 +406,10 @@ public enum ScrollStitcher {
               )
         else { return nil }
 
+        if canvasBottomMatches(canvas, strip: strip) {
+            return nil
+        }
+
         let cs = CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(
             data: nil, width: canvas.width, height: newHeight,
@@ -231,6 +420,39 @@ public enum ScrollStitcher {
         ctx.draw(canvas, in: CGRect(x: 0, y: added, width: canvas.width, height: canvas.height))
         ctx.draw(strip, in: CGRect(x: 0, y: 0, width: strip.width, height: strip.height))
         return ctx.makeImage()
+    }
+
+    /// 裁掉画布底部 `pixels`（上滑回退用）。CGImage y=0 为顶。
+    public static func trimBottom(_ canvas: CGImage, by pixels: Int) -> CGImage? {
+        guard pixels > 0, canvas.height - pixels >= 32 else { return nil }
+        let keep = canvas.height - pixels
+        return canvas.cropping(
+            to: CGRect(x: 0, y: 0, width: canvas.width, height: keep).integral
+        )
+    }
+
+    /// 内容相对上一帧的滚动方向：正=露出下方新内容（下滑），负=上滑回退。
+    public static func signedScrollDelta(previous: CGImage, next: CGImage) -> Int? {
+        if let down = measureAdvance(previous: previous, next: next), down >= minAdvancePixels {
+            return down
+        }
+        if let up = measureAdvance(previous: next, next: previous), up >= minAdvancePixels {
+            return -up
+        }
+        return nil
+    }
+
+    /// 画布底部是否已与待接条带相同（防来回滚重叠）。
+    public static func canvasBottomMatches(_ canvas: CGImage, strip: CGImage, threshold: Double = 8) -> Bool {
+        guard canvas.width == strip.width,
+              strip.height > 0,
+              canvas.height >= strip.height
+        else { return false }
+        let y = canvas.height - strip.height
+        guard let bottom = canvas.cropping(
+            to: CGRect(x: 0, y: y, width: canvas.width, height: strip.height).integral
+        ) else { return false }
+        return !looksDifferent(bottom, strip, threshold: threshold)
     }
 
     public static func append(
