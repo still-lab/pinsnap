@@ -15,7 +15,7 @@
 | H 运营 | 流程文档 | CONNECT_SETUP / STORE_CHECKLIST 可跟踪 |
 | I v1.1 | 代码落地 | `OCRService`（Vision 文本+条码） |
 | J v1.2 | 骨架 | `AccessibilitySnap` 占位 + 文件名模板/导出扩展点 |
-| K v1.3+ | 骨架 | `ScrollStitcher`、`ScreenRecorder` 骨架 |
+| K v1.3+ | 进行中 | 长截：`captureRegion` + `ScrollStitcher` 条带对齐 + Overlay 滚动态；录屏仍为骨架 |
 
 ## M3 细项
 

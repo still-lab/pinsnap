@@ -10,15 +10,24 @@ public enum CaptureOverlayOutcome: Sendable {
     case pinned(CGImage, frame: CGRect, selection: CaptureSelection)
 }
 
+/// 区域反复截帧（由 SessionCoordinator 注入 CaptureService，Overlay 不碰 SCK）。
+public typealias RegionCaptureHandler = @Sendable (CaptureSelection, [CGWindowID]) async throws -> CGImage
+
 /// 截图遮罩：图层化渲染 + 选区固定后标注工具条。
 /// REQ: C-01, C-02, C-06 / UI_SPEC §3
 @MainActor
 public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     public var onFinish: ((CaptureOverlayOutcome) -> Void)?
     public var onNeedUpgrade: (() -> Void)?
+    /// 长截滚动态变化（供 SessionCoordinator 更新状态机）。
+    public var onScrollCaptureActiveChange: ((Bool) -> Void)?
     public var annotationEnabled = true
     public var autoCopyOnSelect = false
     public var autoSaveOnSelect = false
+    /// 框选确认后直接进入长截滚动采集（菜单「长截图」）。
+    public var enterScrollAfterSelect = false
+    /// 区域截帧；未注入时工具条「长截图」不可用。
+    public var captureRegion: RegionCaptureHandler?
 
     private var panels: [OverlayPanel] = []
     private var frames: [ScreenFrame] = []
@@ -33,6 +42,20 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private var drag = OverlayDragSession()
     private var hoverWindow: WindowHit?
     private var toolbar: CaptureToolbar?
+    private var isScrollCapturing = false
+    private var scrollFrames: [CGImage] = []
+    private var scrollPreviewCanvas: CGImage?
+    private var scrollTask: Task<Void, Never>?
+    private var scrollHUD: ScrollCaptureHUD?
+    private var scrollRing: ScrollSelectionRing?
+    /// 滚轮待拼接像素（全局 monitor 累加，采帧后按量消费）。
+    private var scrollPendingPixels: CGFloat = 0
+    private var scrollWheelMonitor: Any?
+    /// 滚动态暂隐的全屏遮罩，完成/取消后再处理。
+    private var scrollHiddenPanels: [OverlayPanel] = []
+    /// 长截完成后的浮动预览（全分辨率另存）。
+    private var isFloatingResult = false
+    private var floatingFullImage: CGImage?
     private var activeTool: CaptureAnnotateTool?
     private var shapeStyle: CaptureShapeStyle = .rect
     private var arrowStyle: CaptureArrowStyle = .arrow
@@ -51,6 +74,8 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private let hoverInterval: TimeInterval = 1.0 / 30.0
     private var keyMonitor: Any?
     private var rightClickMonitor: Any?
+    /// 长截浮动结果时额外装全局 Esc（菜单栏 App 失焦后本地 monitor 常收不到）。
+    private var floatingEscMonitor: Any?
     private var isEditingText = false
     private var pendingTextLocal: CGPoint?
     private weak var textHostView: OverlayView?
@@ -71,8 +96,13 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         super.init()
     }
 
-    public func present(frames: [ScreenFrame], initialSelection: CaptureSelection? = nil) {
+    public func present(
+        frames: [ScreenFrame],
+        initialSelection: CaptureSelection? = nil,
+        enterScrollAfterSelect: Bool = false
+    ) {
         dismiss()
+        self.enterScrollAfterSelect = enterScrollAfterSelect
         self.frames = frames
         annotations.reset()
         for frame in frames {
@@ -125,11 +155,23 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     public func dismiss() {
+        stopScrollCapture(commit: false)
         exitOCRMode()
         closeTextEditor(commit: false)
         removeEscapeHatches()
         toolbar?.orderOut(nil)
+        toolbar?.close()
         toolbar = nil
+        scrollRing?.orderOut(nil)
+        scrollRing = nil
+        scrollHUD?.orderOut(nil)
+        scrollHUD?.close()
+        scrollHUD = nil
+        for panel in scrollHiddenPanels {
+            panel.orderOut(nil)
+            panel.close()
+        }
+        scrollHiddenPanels.removeAll()
         panels.forEach { $0.orderOut(nil); $0.close() }
         panels.removeAll()
         selection = nil
@@ -141,6 +183,9 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         arrowStyle = .arrow
         mosaicStyle = .mosaic
         penStyle = .pen
+        enterScrollAfterSelect = false
+        isFloatingResult = false
+        floatingFullImage = nil
         exitColorPick(updateToolbar: false)
         hideMagnifier()
         draftShape = nil
@@ -232,6 +277,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
 
             switch event.keyCode {
             case 36, 76:
+                if self.isScrollCapturing {
+                    self.stopScrollCapture(commit: true)
+                    return nil
+                }
                 self.commitCopy()
                 return nil
             case 8 where cmd:
@@ -267,9 +316,35 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             NSEvent.removeMonitor(rightClickMonitor)
             self.rightClickMonitor = nil
         }
+        if let floatingEscMonitor {
+            NSEvent.removeMonitor(floatingEscMonitor)
+            self.floatingEscMonitor = nil
+        }
+    }
+
+    private func installFloatingEscMonitor() {
+        if let floatingEscMonitor {
+            NSEvent.removeMonitor(floatingEscMonitor)
+            self.floatingEscMonitor = nil
+        }
+        floatingEscMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.isFloatingResult, event.keyCode == 53 else { return event }
+            self.cancel()
+            return nil
+        }
     }
 
     private func handleEscape() {
+        if isScrollCapturing {
+            stopScrollCapture(commit: false)
+            cancel()
+            return
+        }
+        // 长截浮动结果：Esc 一律关闭，不先清工具
+        if isFloatingResult {
+            cancel()
+            return
+        }
         if isEditingText {
             closeTextEditor(commit: false)
             return
@@ -295,6 +370,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     // MARK: - Mouse (from OverlayView)
 
     fileprivate func mouseDown(at global: CGPoint) {
+        if isScrollCapturing { return }
         if isOCRSelecting { return }
         if isEditingText {
             // 点在输入框外：提交当前文字
@@ -319,7 +395,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     fileprivate func mouseDragged(at global: CGPoint) {
-        if isOCRSelecting || isColorPicking { return }
+        if isScrollCapturing || isOCRSelecting || isColorPicking { return }
         if selectionLocked {
             handleAnnotateMouseDragged(at: global)
             return
@@ -331,7 +407,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     fileprivate func mouseUp(at global: CGPoint) {
-        if isOCRSelecting || isColorPicking { return }
+        if isScrollCapturing || isOCRSelecting || isColorPicking { return }
         if selectionLocked {
             handleAnnotateMouseUp(at: global)
             return
@@ -418,6 +494,11 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         }
         selectionLocked = true
         hideMagnifier()
+        if enterScrollAfterSelect {
+            enterScrollAfterSelect = false
+            startScrollCapture()
+            return
+        }
         showToolbar()
         syncLayers()
     }
@@ -426,6 +507,11 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
 
     private func handleAnnotateMouseDown(at global: CGPoint) {
         guard let sel = selection, sel.logicalRect.contains(global) else {
+            // 浮动长截结果：点在图外直接关闭
+            if isFloatingResult {
+                cancel()
+                return
+            }
             // 点在选区外：重新框选
             selectionLocked = false
             annotations.reset()
@@ -440,7 +526,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             syncLayers()
             return
         }
-        // 未选标注工具时：拖动移动选区
+        // 未选标注工具时：拖动移动选区 / 浮动结果窗
         if activeTool == nil {
             moveGrabStart = global
             moveOriginRect = sel.logicalRect
@@ -506,6 +592,14 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                     selection = CaptureSelection(screenID: next.screenID, logicalRect: rect)
                 } else {
                     selection = next
+                }
+                if isFloatingResult, let panel = panels.first {
+                    panel.setFrame(rect, display: true)
+                    if var frame = frames.first {
+                        frame.logicalBounds = rect
+                        frames = [frame]
+                        (panel.contentView as? OverlayView)?.screenFrame = frame
+                    }
                 }
                 repositionToolbar()
                 syncLayers()
@@ -685,10 +779,11 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         for panel in panels {
             (panel.contentView as? OverlayView)?.apply(
                 selection: selection,
-                hover: selectionLocked ? nil : hoverWindow,
+                hover: selectionLocked || isScrollCapturing ? nil : hoverWindow,
                 shapes: annotations.document.shapes.filter { $0.id != hideID },
                 draft: draftShape,
-                locked: selectionLocked
+                locked: selectionLocked,
+                scrollCapturing: isScrollCapturing
             )
         }
     }
@@ -870,6 +965,434 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     func toolbarSave() { commitSave() }
     func toolbarPin() { commitPin() }
     func toolbarClose() { cancel() }
+    func toolbarScrollCapture() {
+        if isFloatingResult { return }
+        startScrollCapture()
+    }
+
+    // MARK: - Scroll capture (long screenshot)
+
+    private func startScrollCapture() {
+        guard !isScrollCapturing,
+              selectionLocked,
+              let selection,
+              captureRegion != nil
+        else {
+            PinSnapLog.capture.error("startScrollCapture aborted: locked=\(self.selectionLocked) hasCapture=\(self.captureRegion != nil)")
+            return
+        }
+
+        exitOCRMode()
+        closeTextEditor(commit: false)
+        exitColorPick(updateToolbar: false)
+        hideMagnifier()
+        activeTool = nil
+        draftShape = nil
+        hideToolbar()
+
+        scrollFrames = []
+        scrollPreviewCanvas = nil
+        scrollPendingPixels = 0
+        removeScrollWheelMonitor()
+
+        isScrollCapturing = true
+        onScrollCaptureActiveChange?(true)
+
+        // 必须收起全屏遮罩：透明挖空窗仍会挡住 CG 采帧，导致侧栏永远不增长。
+        scrollHiddenPanels = panels
+        for panel in panels {
+            panel.orderOut(nil)
+        }
+
+        let ring = ScrollSelectionRing(selection: selection.logicalRect)
+        scrollRing = ring
+
+        let hud = ScrollCaptureHUD()
+        hud.onComplete = { [weak self] in self?.stopScrollCapture(commit: true) }
+        hud.onCancel = { [weak self] in
+            self?.stopScrollCapture(commit: false)
+            self?.cancel()
+        }
+        if let screen = geometry.screen(id: selection.screenID) {
+            hud.place(beside: selection.logicalRect, inScreenBounds: screen.logicalFrame)
+        }
+        hud.update(preview: nil, frameCount: 0)
+        scrollHUD = hud
+
+        installScrollWheelMonitor()
+
+        PinSnapLog.capture.info(
+            "scroll start rect=\(Int(selection.logicalRect.width))x\(Int(selection.logicalRect.height)) deltaMode=wheel"
+        )
+
+        // 侧栏/描边 hidesOnDeactivate=false，让出前台以便滚轮落到目标页
+        NSApp.deactivate()
+
+        scrollTask?.cancel()
+        scrollTask = Task { [weak self] in
+            await self?.runScrollCaptureLoop()
+        }
+    }
+
+    private func installScrollWheelMonitor() {
+        removeScrollWheelMonitor()
+        // 失焦后滚轮在别的 App：必须用全局 monitor
+        scrollWheelMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            Task { @MainActor in
+                self?.handleScrollWheelForCapture(event)
+            }
+        }
+    }
+
+    private func removeScrollWheelMonitor() {
+        if let monitor = scrollWheelMonitor {
+            NSEvent.removeMonitor(monitor)
+            scrollWheelMonitor = nil
+        }
+    }
+
+    private func handleScrollWheelForCapture(_ event: NSEvent) {
+        guard isScrollCapturing else { return }
+        let points: CGFloat
+        if event.hasPreciseScrollingDeltas {
+            points = event.scrollingDeltaY
+        } else {
+            // 旧式滚轮：一行约 16pt
+            points = event.deltaY * 16
+        }
+        // 系统「自然滚动」下，滑出下方新内容时 delta 为负
+        let revealBottom = event.isDirectionInvertedFromDevice ? -points : points
+        guard revealBottom > 0.05 else { return }
+        let scale = selection.flatMap { geometry.screen(id: $0.screenID)?.scale }
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+        scrollPendingPixels += revealBottom * scale
+    }
+
+    private func runScrollCaptureLoop() async {
+        let capture = captureRegion
+        guard let capture else { return }
+        try? await Task.sleep(nanoseconds: 180_000_000)
+        var failStreak = 0
+
+        while !Task.isCancelled {
+            let alive = await MainActor.run { self.isScrollCapturing }
+            guard alive else { break }
+            let selection = await MainActor.run { self.selection }
+            guard let selection else { break }
+
+            let frameCount = await MainActor.run { self.scrollFrames.count }
+            if frameCount >= ScrollStitcher.maxFrames {
+                await MainActor.run { self.stopScrollCapture(commit: true) }
+                return
+            }
+
+            // 首帧：直接采
+            let needsSeed = await MainActor.run { self.scrollFrames.isEmpty }
+            if needsSeed {
+                let exclude = await MainActor.run { self.scrollExcludeWindowIDs() }
+                do {
+                    let image = try await capture(selection, exclude)
+                    failStreak = 0
+                    await MainActor.run {
+                        guard self.isScrollCapturing else { return }
+                        self.scrollFrames.append(image)
+                        self.scrollPreviewCanvas = image
+                        self.scrollPendingPixels = 0
+                        self.scrollHUD?.update(preview: image, frameCount: 1)
+                        PinSnapLog.capture.info("scroll seed \(image.width)x\(image.height)")
+                    }
+                } catch {
+                    failStreak += 1
+                    PinSnapLog.capture.error("scroll capture frame: \(error.localizedDescription)")
+                    if failStreak >= 8 {
+                        await MainActor.run { self.stopScrollCapture(commit: false) }
+                        return
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                continue
+            }
+
+            let pending = await MainActor.run { self.scrollPendingPixels }
+            let minAdvance = CGFloat(ScrollStitcher.minAdvancePixels)
+            if pending < minAdvance {
+                try? await Task.sleep(nanoseconds: 40_000_000)
+                continue
+            }
+
+            // 滚轮只作「该采了」的扳机；delta 不等于真实滚动量（编辑器按行滚）
+            let hint = await MainActor.run { () -> Int in
+                let h = Int(self.scrollPendingPixels.rounded())
+                self.scrollPendingPixels = 0
+                return h
+            }
+
+            let exclude = await MainActor.run { self.scrollExcludeWindowIDs() }
+            do {
+                let image = try await capture(selection, exclude)
+                failStreak = 0
+
+                let snapshot: (last: CGImage?, canvas: CGImage?) = await MainActor.run {
+                    (self.scrollFrames.last, self.scrollPreviewCanvas)
+                }
+                guard let last = snapshot.last, let canvas = snapshot.canvas else {
+                    try? await Task.sleep(nanoseconds: 40_000_000)
+                    continue
+                }
+
+                let stitched = await Task.detached(priority: .userInitiated) { () -> (CGImage, CGImage, Int)? in
+                    let frame: CGImage
+                    if last.width == image.width, last.height == image.height {
+                        frame = image
+                    } else if let scaled = ScrollStitcher.rescaleImage(image, toWidth: last.width),
+                              scaled.height == last.height {
+                        frame = scaled
+                    } else {
+                        return nil
+                    }
+                    if !ScrollStitcher.looksDifferent(last, frame, threshold: 3) {
+                        return nil
+                    }
+                    guard let advance = ScrollStitcher.measureAdvance(
+                        previous: last,
+                        next: frame,
+                        hint: hint
+                    ), advance >= ScrollStitcher.minAdvancePixels else {
+                        return nil
+                    }
+                    guard let nextCanvas = ScrollStitcher.appendByAdvance(
+                        canvas: canvas,
+                        nextFrame: frame,
+                        advance: advance
+                    ), nextCanvas.height > canvas.height else {
+                        return nil
+                    }
+                    return (frame, nextCanvas, advance)
+                }.value
+
+                if let (frame, nextCanvas, advance) = stitched {
+                    let hitLimit = await MainActor.run { () -> Bool in
+                        guard self.isScrollCapturing else { return true }
+                        self.scrollFrames.append(frame)
+                        self.scrollPreviewCanvas = nextCanvas
+                        self.scrollHUD?.update(preview: nextCanvas, frameCount: self.scrollFrames.count)
+                        PinSnapLog.capture.info(
+                            "scroll measured=\(advance) hint=\(hint) frame=\(self.scrollFrames.count) canvasH=\(nextCanvas.height)"
+                        )
+                        return nextCanvas.height >= ScrollStitcher.maxOutputHeight
+                    }
+                    if hitLimit {
+                        await MainActor.run { self.stopScrollCapture(commit: true) }
+                        return
+                    }
+                }
+            } catch {
+                failStreak += 1
+                PinSnapLog.capture.error("scroll capture frame: \(error.localizedDescription)")
+                await MainActor.run {
+                    self.scrollHUD?.update(
+                        preview: self.scrollPreviewCanvas,
+                        frameCount: self.scrollFrames.count,
+                        status: "采帧失败"
+                    )
+                }
+                if failStreak >= 8 {
+                    await MainActor.run { self.stopScrollCapture(commit: self.scrollFrames.count > 0) }
+                    return
+                }
+            }
+            try? await Task.sleep(nanoseconds: 40_000_000)
+        }
+    }
+
+    private func scrollExcludeWindowIDs() -> [CGWindowID] {
+        var ids: [CGWindowID] = []
+        if let ring = scrollRing {
+            ids.append(CGWindowID(ring.windowNumber))
+        }
+        if let hud = scrollHUD {
+            ids.append(CGWindowID(hud.windowNumber))
+        }
+        for panel in scrollHiddenPanels {
+            ids.append(CGWindowID(panel.windowNumber))
+        }
+        return ids
+    }
+
+    private func stopScrollCapture(commit: Bool) {
+        scrollTask?.cancel()
+        scrollTask = nil
+        removeScrollWheelMonitor()
+        scrollPendingPixels = 0
+
+        let wasActive = isScrollCapturing
+        // dismiss / 二次调用：勿把已恢复的 panels 再赋成空数组
+        if !wasActive {
+            return
+        }
+
+        let framesToStitch = scrollFrames
+        let preview = scrollPreviewCanvas
+        scrollFrames = []
+        scrollPreviewCanvas = nil
+        scrollHUD?.orderOut(nil)
+        scrollHUD = nil
+        scrollRing?.orderOut(nil)
+        scrollRing = nil
+
+        isScrollCapturing = false
+        onScrollCaptureActiveChange?(false)
+
+        let hidden = scrollHiddenPanels
+        scrollHiddenPanels = []
+
+        if commit {
+            for panel in hidden {
+                panel.orderOut(nil)
+                panel.close()
+            }
+            for panel in panels {
+                panel.orderOut(nil)
+                panel.close()
+            }
+            panels = []
+
+            guard !framesToStitch.isEmpty else {
+                PinSnapLog.capture.error("scroll commit with 0 frames")
+                cancel()
+                return
+            }
+            let stitched = preview
+                ?? ScrollStitcher.stitchVertically(framesToStitch)
+                ?? ScrollStitcher.stackImages(framesToStitch)
+            guard let stitched,
+                  let selection,
+                  let screen = geometry.screen(id: selection.screenID)
+            else {
+                PinSnapLog.capture.error("scroll stitch failed frames=\(framesToStitch.count)")
+                cancel()
+                return
+            }
+            PinSnapLog.capture.info(
+                "scroll done frames=\(framesToStitch.count) size=\(stitched.width)x\(stitched.height)"
+            )
+            presentStitchedResult(stitched, on: screen, anchor: selection)
+            return
+        }
+
+        // 取消长截：恢复遮罩；若随后 cancel()/dismiss 会关掉它们
+        panels = hidden
+        for panel in panels {
+            panel.orderFrontRegardless()
+            panel.ignoresMouseEvents = false
+        }
+        syncLayers()
+        if selectionLocked { showToolbar() }
+    }
+
+    private func presentStitchedResult(_ image: CGImage, on screen: ScreenDescriptor, anchor: CaptureSelection) {
+        annotations.reset()
+        draftShape = nil
+        floatingFullImage = image
+        isFloatingResult = true
+
+        let scale = screen.scale
+        let fullW = CGFloat(image.width) / scale
+        let fullH = CGFloat(image.height) / scale
+        let maxW = min(screen.logicalFrame.width * 0.42, 480)
+        let maxH = min(screen.logicalFrame.height * 0.58, 620)
+        let fit = min(1, maxW / max(fullW, 1), maxH / max(fullH, 1))
+        let logicalW = max(120, fullW * fit)
+        let logicalH = max(120, fullH * fit)
+
+        var rect = CGRect(
+            x: anchor.logicalRect.midX - logicalW / 2,
+            y: anchor.logicalRect.midY - logicalH / 2,
+            width: logicalW,
+            height: logicalH
+        )
+        let screenFrame = screen.logicalFrame
+        let toolbarReserve: CGFloat = 56
+        rect.origin.x = min(max(rect.minX, screenFrame.minX + 16), screenFrame.maxX - logicalW - 16)
+        rect.origin.y = min(
+            max(rect.minY, screenFrame.minY + toolbarReserve + 16),
+            screenFrame.maxY - logicalH - 16
+        )
+
+        let displayPixelsW = max(1, Int((logicalW * scale).rounded()))
+        let displayPixelsH = max(1, Int((logicalH * scale).rounded()))
+        let displayImage = Self.rescaleImage(
+            image,
+            toSize: CGSize(width: displayPixelsW, height: displayPixelsH)
+        ) ?? image
+
+        let newFrame = ScreenFrame(
+            screenID: screen.id,
+            logicalBounds: rect,
+            scale: scale,
+            image: displayImage
+        )
+        frames = [newFrame]
+        selection = CaptureSelection(screenID: screen.id, logicalRect: rect)
+        selectionLocked = true
+
+        for panel in panels {
+            panel.orderOut(nil)
+            panel.close()
+        }
+        panels.removeAll()
+
+        let panel = OverlayPanel(
+            contentRect: rect,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+        // 低于工具条，避免挡住关闭按钮
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = false
+        panel.acceptsMouseMovedEvents = true
+        panel.isMovableByWindowBackground = false
+        let view = OverlayView(frame: NSRect(origin: .zero, size: rect.size))
+        view.screenFrame = newFrame
+        view.controller = self
+        view.floatingResult = true
+        view.installLayers()
+        panel.contentView = view
+        panel.setFrame(rect, display: true)
+        panel.orderFrontRegardless()
+        panels.append(panel)
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(view)
+
+        showToolbar()
+        toolbar?.level = .floating + 1
+        toolbar?.orderFrontRegardless()
+        installFloatingEscMonitor()
+        syncLayers()
+    }
+
+    private static func rescaleImage(_ image: CGImage, toSize size: CGSize) -> CGImage? {
+        let w = max(1, Int(size.width.rounded()))
+        let h = max(1, Int(size.height.rounded()))
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        ctx.interpolationQuality = .medium
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
 
     // MARK: - OCR
 
@@ -993,8 +1516,23 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     // MARK: - Commit
 
     fileprivate func cancel() {
+        forceCloseFloatingChrome()
         dismiss()
         onFinish?(.cancelled)
+    }
+
+    /// 确保长截浮动窗 / 工具条被关掉（避免只 orderOut 失败留下残影）。
+    private func forceCloseFloatingChrome() {
+        toolbar?.orderOut(nil)
+        toolbar?.close()
+        toolbar = nil
+        for panel in panels {
+            panel.orderOut(nil)
+            panel.close()
+        }
+        panels.removeAll()
+        isFloatingResult = false
+        floatingFullImage = nil
     }
 
     fileprivate func commitCopy() {
@@ -1110,15 +1648,39 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     fileprivate func commitPin() {
         guard let image = exportImage(), let selection else { return }
         let frame = selection.logicalRect
+        // 长图全分辨率贴图会卡死交互；贴图侧限制最长边
+        let pinImage = Self.cappedImage(image, maxEdge: 4096)
+        forceCloseFloatingChrome()
         dismiss()
-        onFinish?(.pinned(image, frame: frame, selection: selection))
+        onFinish?(.pinned(pinImage, frame: frame, selection: selection))
+    }
+
+    private static func cappedImage(_ image: CGImage, maxEdge: Int) -> CGImage {
+        let edge = max(image.width, image.height)
+        guard edge > maxEdge, edge > 0 else { return image }
+        let scale = CGFloat(maxEdge) / CGFloat(edge)
+        let w = max(1, Int((CGFloat(image.width) * scale).rounded()))
+        let h = max(1, Int((CGFloat(image.height) * scale).rounded()))
+        return rescaleImage(image, toSize: CGSize(width: w, height: h)) ?? image
     }
 
     private func exportImage() -> CGImage? {
         guard let selection,
-              let frame = frames.first(where: { $0.screenID == selection.screenID }),
-              let base = exporter.crop(frame: frame, selection: selection, geometry: geometry)
+              let frame = frames.first(where: { $0.screenID == selection.screenID })
         else { return nil }
+
+        // 长截浮动结果：导出全分辨率原图 + 按显示逻辑坐标放大标注
+        if isFloatingResult, let full = floatingFullImage {
+            let pixelScale = CGFloat(full.width) / max(selection.logicalRect.width, 1)
+            let scaled = annotationsScaledToPixels(scale: pixelScale)
+            let ctrl = AnnotationController()
+            for s in scaled.shapes { ctrl.add(s) }
+            return ctrl.exportFlattened(base: full) ?? full
+        }
+
+        guard let base = exporter.crop(frame: frame, selection: selection, geometry: geometry) else {
+            return nil
+        }
         let scaled = annotationsScaledToPixels(scale: frame.scale)
         let ctrl = AnnotationController()
         for s in scaled.shapes { ctrl.add(s) }
@@ -1178,15 +1740,28 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         for panel in panels {
             (panel.contentView as? OverlayView)?.apply(
                 selection: selection,
-                hover: selectionLocked ? nil : hoverWindow,
-                shapes: annotations.document.shapes,
-                draft: draftShape,
-                locked: selectionLocked
+                hover: selectionLocked || isScrollCapturing ? nil : hoverWindow,
+                shapes: isScrollCapturing ? [] : annotations.document.shapes,
+                draft: isScrollCapturing ? nil : draftShape,
+                locked: selectionLocked,
+                scrollCapturing: isScrollCapturing
             )
         }
     }
 
     fileprivate func keyDown(_ event: NSEvent) {
+        if isScrollCapturing {
+            if event.keyCode == 53 {
+                stopScrollCapture(commit: false)
+                cancel()
+                return
+            }
+            if event.keyCode == 36 || event.keyCode == 76 {
+                stopScrollCapture(commit: true)
+                return
+            }
+            return
+        }
         if isOCRSelecting {
             if event.keyCode == 53 {
                 exitOCRMode()
@@ -1242,6 +1817,8 @@ private final class OverlayPanel: NSPanel {
 private final class OverlayView: NSView, NSTextFieldDelegate {
     weak var controller: CaptureOverlayController?
     var screenFrame: ScreenFrame?
+    /// 长截浮动结果：无全屏遮罩暗角，仅展示图片。
+    var floatingResult = false
 
     private let imageLayer = CALayer()
     private let dimLayer = CAShapeLayer()
@@ -1573,31 +2150,55 @@ private final class OverlayView: NSView, NSTextFieldDelegate {
         hover: WindowHit?,
         shapes: [Shape],
         draft: Shape?,
-        locked: Bool
+        locked: Bool,
+        scrollCapturing: Bool = false
     ) {
         guard let screenFrame else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
+        imageLayer.opacity = scrollCapturing ? 0 : 1
+        annotationLayer.isHidden = scrollCapturing
+        if floatingResult {
+            dimLayer.fillColor = NSColor.clear.cgColor
+            dimLayer.path = nil
+            selectionBorder.strokeColor = NSColor.white.withAlphaComponent(0.85).cgColor
+        } else {
+            dimLayer.fillColor = scrollCapturing
+                ? NSColor.black.withAlphaComponent(0.35).cgColor
+                : NSColor.black.withAlphaComponent(0.45).cgColor
+            selectionBorder.strokeColor = NSColor.white.cgColor
+        }
+
         let dimPath = CGMutablePath()
-        dimPath.addRect(bounds)
+        if !floatingResult {
+            dimPath.addRect(bounds)
+        }
 
         appliedSelection = selection
         if let sel = selection, sel.screenID == screenFrame.screenID {
             let local = pixelAlign(convertFromGlobal(sel.logicalRect))
-            dimPath.addRect(local)
+            if !floatingResult {
+                dimPath.addRect(local)
+            }
             // 描边画在选区外侧（线宽一半），避免与挖空边抢同一像素导致闪动
             let border = local.insetBy(dx: -1, dy: -1)
             selectionBorder.path = CGPath(rect: border, transform: nil)
             selectionBorder.isHidden = false
-            renderAnnotations(shapes: shapes, draft: draft, in: local)
+            if scrollCapturing {
+                annotationLayer.sublayers = nil
+            } else {
+                renderAnnotations(shapes: shapes, draft: draft, in: local)
+            }
         } else {
             selectionBorder.path = nil
             selectionBorder.isHidden = true
             annotationLayer.sublayers = nil
         }
 
-        dimLayer.path = dimPath
+        if !floatingResult {
+            dimLayer.path = dimPath
+        }
 
         if let hover, !locked {
             let local = pixelAlign(convertFromGlobal(hover.logicalBounds))

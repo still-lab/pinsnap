@@ -72,6 +72,23 @@ public struct ScreenGeometry: ScreenGeometryProtocol {
         )
     }
 
+    /// Cocoa 全局坐标（主屏左下为原点）→ `CGWindowListCreateImage` 全局坐标（主屏左上为原点）。
+    public static func cocoaToCGWindowRect(_ cocoa: CGRect) -> CGRect {
+        let mainHeight = NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
+            ?? NSScreen.main?.frame.height
+            ?? cocoa.height
+        return cocoaToCGWindowRect(cocoa, mainDisplayHeight: mainHeight)
+    }
+
+    public static func cocoaToCGWindowRect(_ cocoa: CGRect, mainDisplayHeight: CGFloat) -> CGRect {
+        CGRect(
+            x: cocoa.origin.x,
+            y: mainDisplayHeight - cocoa.origin.y - cocoa.height,
+            width: cocoa.width,
+            height: cocoa.height
+        )
+    }
+
     private func dist(_ rect: CGRect, _ point: CGPoint) -> CGFloat {
         let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
         let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)

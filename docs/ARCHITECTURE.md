@@ -37,13 +37,15 @@
 
 ```
 Idle
-  │ F1 / 菜单
+  │ F1 / 菜单 / 长截图
   ▼
 Preparing ──权限失败──► Idle（深链系统设置，无引导窗）
   │ OK
   ▼
 Capturing ──Esc──► Idle（丢弃）
   │ 确认选区
+  ├─（长截）► ScrollCapturing ──完成──► Stitching ──► Annotating
+  │              └─Esc──► Idle
   ▼
 Annotating（可跳过）──Esc──► 策略：回 Capturing 或 Idle（可配，默认回 Capturing）
   │ 出口
@@ -54,6 +56,7 @@ Committing（copy / save / pin / saveAs）
 Idle
 ```
 
+长截（v1.3）：框选后遮罩挖空穿透，用户手动滚动目标内容；`CaptureService.captureRegion` 定时采帧，`ScrollStitcher` 拼接后回到 Annotating。
 ## 贴图运行时
 
 - 每张贴图一个 `NSPanel`（`.nonactivatingPanel`，floating）。

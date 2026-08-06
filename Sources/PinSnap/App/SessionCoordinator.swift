@@ -44,11 +44,28 @@ public final class SessionCoordinator {
         overlay.onNeedUpgrade = { [weak self] in
             self?.onFreeLimit?()
         }
+        overlay.onScrollCaptureActiveChange = { [weak self] active in
+            guard let self else { return }
+            if active {
+                self.state = .scrollCapturing
+            } else if self.state == .scrollCapturing || self.state == .stitching {
+                self.state = .annotating
+            }
+        }
+        overlay.captureRegion = { [capture] selection, excludeIDs in
+            try await capture.captureRegion(selection, excludingWindowIDs: excludeIDs)
+        }
     }
 
     public func beginCapture(autoCopy: Bool = false, autoSave: Bool = false) {
         cancelDelay()
-        Task { await beginCaptureAsync(autoCopy: autoCopy, autoSave: autoSave, initialSelection: nil) }
+        Task { await beginCaptureAsync(autoCopy: autoCopy, autoSave: autoSave, initialSelection: nil, scrollAfterSelect: false) }
+    }
+
+    /// 长截图：框选后进入滚动采集。
+    public func beginScrollCapture() {
+        cancelDelay()
+        Task { await beginCaptureAsync(autoCopy: false, autoSave: false, initialSelection: nil, scrollAfterSelect: true) }
     }
 
     /// REQ: C-11 — 固定延时后进入普通截图；菜单栏逐秒倒计时。
@@ -73,7 +90,7 @@ public final class SessionCoordinator {
             }
             self.onDelayCountdown?(nil)
             self.delayTask = nil
-            await self.beginCaptureAsync(autoCopy: autoCopy, autoSave: autoSave, initialSelection: nil)
+            await self.beginCaptureAsync(autoCopy: autoCopy, autoSave: autoSave, initialSelection: nil, scrollAfterSelect: false)
         }
     }
 
@@ -81,13 +98,14 @@ public final class SessionCoordinator {
     public func beginCaptureLastRegion(autoCopy: Bool = false, autoSave: Bool = false) {
         cancelDelay()
         guard let lastSelection else { return }
-        Task { await beginCaptureAsync(autoCopy: autoCopy, autoSave: autoSave, initialSelection: lastSelection) }
+        Task { await beginCaptureAsync(autoCopy: autoCopy, autoSave: autoSave, initialSelection: lastSelection, scrollAfterSelect: false) }
     }
 
     public func beginCaptureAsync(
         autoCopy: Bool = false,
         autoSave: Bool = false,
-        initialSelection: CaptureSelection? = nil
+        initialSelection: CaptureSelection? = nil,
+        scrollAfterSelect: Bool = false
     ) async {
         guard state == .idle || state == .preparing else { return }
         state = .preparing
@@ -108,7 +126,15 @@ public final class SessionCoordinator {
             let frames = try await capture.captureStillFrames()
             overlay.autoCopyOnSelect = autoCopy
             overlay.autoSaveOnSelect = autoSave && !autoCopy
-            overlay.present(frames: frames, initialSelection: initialSelection)
+            // 必须经 present 传入：present→dismiss 会清掉属性上的 flag
+            overlay.present(
+                frames: frames,
+                initialSelection: initialSelection,
+                enterScrollAfterSelect: scrollAfterSelect
+            )
+            if initialSelection != nil, !scrollAfterSelect {
+                state = .annotating
+            }
         } catch CaptureError.permissionDenied {
             state = .idle
             PinSnapLog.capture.error("capture permissionDenied")

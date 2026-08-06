@@ -40,9 +40,9 @@ Settings → Purchase, Support
 ### Capture
 
 - `ScreenGeometry`：屏列表、点↔像素、screenID。
-- `CaptureService`：`captureStillFrames() async throws -> [ScreenFrame]`。
+- `CaptureService`：`captureStillFrames()`；`captureRegion(_:excludingWindowIDs:)`（长截采帧）。
 - `WindowTracker`：`windowRects(at: CGPoint) -> [WindowHit]`。
-
+- `ScrollStitcher`：手动滚多帧垂直拼接（overlap / 漂移 / 重复帧过滤）。
 ### Overlay
 
 - 仅展示与收集 `CaptureSelection`；确认后回调 Coordinator。

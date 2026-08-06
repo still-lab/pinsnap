@@ -192,6 +192,7 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(lastRegion)
         menu.addItem(actionItem("截图并复制", #selector(captureAutoCopy)))
         menu.addItem(actionItem("截图并保存", #selector(captureAutoSave)))
+        menu.addItem(actionItem("长截图", #selector(captureScroll)))
         menu.addItem(.separator())
 
         menu.addItem(actionItem("贴图", #selector(paste), shortcut: prefs.displayString(for: .paste)))
@@ -312,6 +313,12 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func captureAutoSave() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             AppBootstrap.shared.coordinator.beginCapture(autoSave: true)
+        }
+    }
+
+    @objc private func captureScroll() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            AppBootstrap.shared.coordinator.beginScrollCapture()
         }
     }
 

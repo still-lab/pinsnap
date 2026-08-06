@@ -12,6 +12,7 @@ protocol CaptureToolbarDelegate: AnyObject {
     func toolbarUndo()
     func toolbarRedo()
     func toolbarOCR()
+    func toolbarScrollCapture()
     func toolbarCopy()
     func toolbarSave()
     func toolbarPin()
@@ -27,7 +28,7 @@ final class CaptureToolbar: NSPanel {
     private let rowHeight: CGFloat = 40
     private let sidePad: CGFloat = 10
     private let gap: CGFloat = 8
-    private let barWidth: CGFloat = 528
+    private let barWidth: CGFloat = 566
     private let subRowExtra: CGFloat = 34
     private let dividerHeight: CGFloat = 1
     /// 工具条与选区之间的间距
@@ -65,7 +66,7 @@ final class CaptureToolbar: NSPanel {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 528, height: rowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: 566, height: rowHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -134,6 +135,7 @@ final class CaptureToolbar: NSPanel {
         eyedropperButton.setButtonType(.toggle)
         row1.addArrangedSubview(eyedropperButton)
         row1.addArrangedSubview(actionBtn("doc.text.magnifyingglass", tip: "OCR", #selector(ocrAction)))
+        row1.addArrangedSubview(actionBtn("arrow.up.arrow.down", tip: "上下长截", #selector(scrollCaptureAction)))
         row1.addArrangedSubview(actionBtn("doc.on.doc", tip: "复制", #selector(copyAction)))
         row1.addArrangedSubview(actionBtn("square.and.arrow.down", tip: "保存", #selector(saveAction)))
         row1.addArrangedSubview(actionBtn("pin", tip: "贴图", #selector(pinAction)))
@@ -495,6 +497,7 @@ final class CaptureToolbar: NSPanel {
     @objc private func undoAction() { actionHandler?.toolbarUndo() }
     @objc private func redoAction() { actionHandler?.toolbarRedo() }
     @objc private func ocrAction() { actionHandler?.toolbarOCR() }
+    @objc private func scrollCaptureAction() { actionHandler?.toolbarScrollCapture() }
     @objc private func copyAction() { actionHandler?.toolbarCopy() }
     @objc private func saveAction() { actionHandler?.toolbarSave() }
     @objc private func pinAction() { actionHandler?.toolbarPin() }
