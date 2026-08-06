@@ -9,7 +9,7 @@
 | `Sources/PinSnap/Overlay` | OverlayUI | CaptureOverlayPanel、SelectionView、MagnifierView、CaptureToolbar |
 | `Sources/PinSnap/Annotate` | Annotator | AnnotationDocument、Shape、Renderer、UndoCommands |
 | `Sources/PinSnap/Pin` | PinBoard | PinStore、PinPanelController、PinSessionCoder、ClipboardBridge |
-| `Sources/PinSnap/Export` | Export | ImageExporter、FilenameTemplate |
+| `Sources/PinSnap/Export` | Export | ImageExporter、FilenameTemplate、SavePreferences |
 | `Sources/PinSnap/Purchase` | Purchase | StoreClient、FeatureGate、EntitlementSync |
 | `Sources/PinSnap/Settings` | Settings | SwiftUI Settings scene |
 | `Sources/PinSnap/Support` | Support | Logger、Toast、AtomicFile、Result 扩展 |
@@ -68,6 +68,7 @@ Settings → Purchase, Support
 
 ### Export
 
+- `SavePreferences`：默认/快捷目录书签、png/jpeg、文件名模板。
 - PNG 默认；JPEG 质量可配；目录书签 security-scoped。
 
 ## 测试映射

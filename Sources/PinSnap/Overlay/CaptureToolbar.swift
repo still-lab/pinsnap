@@ -1,45 +1,6 @@
 import AppKit
 import Foundation
 
-enum CaptureAnnotateTool: Int, CaseIterable {
-    case shape
-    case arrow
-    case pen
-    case mosaic
-    case text
-
-    var tip: String {
-        switch self {
-        case .shape: return "形状"
-        case .arrow: return "箭头"
-        case .pen: return "画笔"
-        case .mosaic: return "马赛克"
-        case .text: return "文字"
-        }
-    }
-}
-
-enum CaptureShapeStyle: Int {
-    case rect
-    case ellipse
-}
-
-enum CaptureArrowStyle: Int {
-    case line
-    case arrow
-}
-
-enum CaptureMosaicStyle: Int {
-    case mosaic
-    case blur
-}
-
-enum CapturePenStyle: Int {
-    case pen
-    case marker
-    case eraser
-}
-
 @MainActor
 protocol CaptureToolbarDelegate: AnyObject {
     func toolbarSelectTool(_ tool: CaptureAnnotateTool?)

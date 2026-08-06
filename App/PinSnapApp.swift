@@ -185,6 +185,7 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lastRegion.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
         menu.addItem(lastRegion)
         menu.addItem(actionItem("截图并复制", #selector(captureAutoCopy)))
+        menu.addItem(actionItem("截图并保存", #selector(captureAutoSave)))
         menu.addItem(.separator())
 
         menu.addItem(actionItem("贴图", #selector(paste), shortcut: "F3"))
@@ -288,6 +289,12 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    @objc private func captureAutoSave() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            AppBootstrap.shared.coordinator.beginCapture(autoSave: true)
+        }
+    }
+
     @objc private func paste() {
         AppBootstrap.shared.coordinator.beginPasteFromClipboard()
     }
@@ -320,7 +327,7 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let window = NSWindow(contentViewController: hosting)
             window.title = "PinSnap"
             window.styleMask = [.titled, .closable]
-            window.setContentSize(NSSize(width: 460, height: 320))
+            window.setContentSize(NSSize(width: 520, height: 360))
             settingsWindow = window
         }
         settingsWindow?.makeKeyAndOrderFront(nil)

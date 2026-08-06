@@ -18,6 +18,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     public var onNeedUpgrade: (() -> Void)?
     public var annotationEnabled = true
     public var autoCopyOnSelect = false
+    public var autoSaveOnSelect = false
 
     private var panels: [OverlayPanel] = []
     private var frames: [ScreenFrame] = []
@@ -221,7 +222,11 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                 self.commitCopy()
                 return nil
             case 1 where cmd:
-                self.commitSave()
+                if event.modifierFlags.contains(.shift) {
+                    self.commitSave()
+                } else {
+                    self.commitQuickSave()
+                }
                 return nil
             case 6 where cmd:
                 if event.modifierFlags.contains(.shift) {
@@ -396,6 +401,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private func finishSelection() {
         if autoCopyOnSelect {
             commitCopy()
+            return
+        }
+        if autoSaveOnSelect {
+            commitQuickSave()
             return
         }
         selectionLocked = true
@@ -991,6 +1000,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             PinSnapLog.app.error("save: exportImage returned nil")
             return
         }
+        let format = SavePreferences.saveFormat
 
         // 菜单栏 App + 全屏 screenSaver 遮罩时，NSSavePanel 常被挡住或无法成为 key。
         let overlayPanels = panels
@@ -1005,10 +1015,17 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         NSApp.activate(ignoringOtherApps: true)
 
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
+        panel.allowedContentTypes = [SavePreferences.contentType(for: format)]
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
-        panel.nameFieldStringValue = FilenameTemplate.default.render(width: image.width, height: image.height) + ".png"
+        panel.nameFieldStringValue = SavePreferences.suggestedFileName(
+            width: image.width,
+            height: image.height,
+            format: format
+        )
+        if let dir = SavePreferences.resolveDirectory(.defaultSave) {
+            panel.directoryURL = dir
+        }
         panel.level = .modalPanel
 
         let result = panel.runModal()
@@ -1018,7 +1035,6 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         }
 
         guard result == .OK, let url = panel.url else {
-            // 取消：恢复遮罩与工具条
             for p in overlayPanels { p.orderFrontRegardless() }
             if selectionLocked {
                 showToolbar()
@@ -1033,7 +1049,14 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                 if selectionLocked { showToolbar() }
                 return
             }
-            try exporter.save(image, to: url, format: .png)
+            if let dir = SavePreferences.resolveDirectory(.defaultSave),
+               url.deletingLastPathComponent().standardizedFileURL == dir.standardizedFileURL {
+                try SavePreferences.withSecurityScopedAccess(to: dir) {
+                    try exporter.save(image, to: url, format: format)
+                }
+            } else {
+                try exporter.save(image, to: url, format: format)
+            }
             dismiss()
             onFinish?(.saved(image, selection: selection))
         } catch {
@@ -1042,6 +1065,36 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             if selectionLocked {
                 showToolbar()
             }
+        }
+    }
+
+    /// ⌘S：写入快捷/默认目录；均未配置则回落保存面板。⌘⇧S 为另存为面板。
+    fileprivate func commitQuickSave() {
+        guard let image = exportImage(), let selection else {
+            PinSnapLog.app.error("quickSave: exportImage/selection missing")
+            return
+        }
+        guard let directory = SavePreferences.resolveQuickSaveDirectory() else {
+            commitSave()
+            return
+        }
+        let format = SavePreferences.saveFormat
+        let url = SavePreferences.makeUniqueFileURL(
+            in: directory,
+            width: image.width,
+            height: image.height,
+            format: format
+        )
+        do {
+            try SavePreferences.withSecurityScopedAccess(to: directory) {
+                try exporter.save(image, to: url, format: format)
+            }
+            dismiss()
+            onFinish?(.saved(image, selection: selection))
+            Toast.shared.show("已保存")
+        } catch {
+            PinSnapLog.app.error("quickSave failed: \(error.localizedDescription)")
+            commitSave()
         }
     }
 
@@ -1149,7 +1202,12 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             handleEscape()
         case 36, 76: commitCopy()
         case 8 where event.modifierFlags.contains(.command): commitCopy()
-        case 1 where event.modifierFlags.contains(.command): commitSave()
+        case 1 where event.modifierFlags.contains(.command):
+            if event.modifierFlags.contains(.shift) {
+                commitSave()
+            } else {
+                commitQuickSave()
+            }
         case 6 where event.modifierFlags.contains(.command):
             if event.modifierFlags.contains(.shift) {
                 toolbarRedo()

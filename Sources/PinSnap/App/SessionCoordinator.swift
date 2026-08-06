@@ -46,13 +46,13 @@ public final class SessionCoordinator {
         }
     }
 
-    public func beginCapture(autoCopy: Bool = false) {
+    public func beginCapture(autoCopy: Bool = false, autoSave: Bool = false) {
         cancelDelay()
-        Task { await beginCaptureAsync(autoCopy: autoCopy, initialSelection: nil) }
+        Task { await beginCaptureAsync(autoCopy: autoCopy, autoSave: autoSave, initialSelection: nil) }
     }
 
     /// REQ: C-11 — 固定延时后进入普通截图；菜单栏逐秒倒计时。
-    public func beginDelayedCapture(autoCopy: Bool = false) {
+    public func beginDelayedCapture(autoCopy: Bool = false, autoSave: Bool = false) {
         cancelDelay()
         guard state == .idle || state == .preparing else { return }
         state = .preparing
@@ -73,19 +73,20 @@ public final class SessionCoordinator {
             }
             self.onDelayCountdown?(nil)
             self.delayTask = nil
-            await self.beginCaptureAsync(autoCopy: autoCopy, initialSelection: nil)
+            await self.beginCaptureAsync(autoCopy: autoCopy, autoSave: autoSave, initialSelection: nil)
         }
     }
 
     /// REQ: C-10 — 用内存中上次成功选区直接锁定选区。
-    public func beginCaptureLastRegion(autoCopy: Bool = false) {
+    public func beginCaptureLastRegion(autoCopy: Bool = false, autoSave: Bool = false) {
         cancelDelay()
         guard let lastSelection else { return }
-        Task { await beginCaptureAsync(autoCopy: autoCopy, initialSelection: lastSelection) }
+        Task { await beginCaptureAsync(autoCopy: autoCopy, autoSave: autoSave, initialSelection: lastSelection) }
     }
 
     public func beginCaptureAsync(
         autoCopy: Bool = false,
+        autoSave: Bool = false,
         initialSelection: CaptureSelection? = nil
     ) async {
         guard state == .idle || state == .preparing else { return }
@@ -106,6 +107,7 @@ public final class SessionCoordinator {
             state = .capturing
             let frames = try await capture.captureStillFrames()
             overlay.autoCopyOnSelect = autoCopy
+            overlay.autoSaveOnSelect = autoSave && !autoCopy
             overlay.present(frames: frames, initialSelection: initialSelection)
         } catch CaptureError.permissionDenied {
             state = .idle
@@ -121,9 +123,7 @@ public final class SessionCoordinator {
     }
 
     public func openLastSaveDirectory() {
-        let dir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser
-        NSWorkspace.shared.open(dir)
+        SavePreferences.openDefaultDirectoryInFinder()
     }
 
     public func beginPasteFromClipboard() {

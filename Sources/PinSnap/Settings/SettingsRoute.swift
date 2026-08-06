@@ -18,7 +18,10 @@ public enum SettingsRoute: String, Sendable, CaseIterable, Identifiable, Hashabl
 public struct SettingsRootView: View {
     @State private var route: SettingsRoute = .general
     @AppStorage(ColorValueFormat.defaultsKey) private var colorFormat = ColorValueFormat.hex.rawValue
-    @AppStorage("pinsnap.filenameTemplate") private var template = FilenameTemplate.default.pattern
+    @AppStorage(SavePreferences.templateKey) private var template = FilenameTemplate.default.pattern
+    @AppStorage(SavePreferences.formatKey) private var saveFormat = ImageFormat.png.rawValue
+    @State private var defaultPath = SavePreferences.displayPath(for: .defaultSave)
+    @State private var quickPath = SavePreferences.displayPath(for: .quickSave)
 
     public init() {}
 
@@ -45,15 +48,47 @@ public struct SettingsRootView: View {
                         LabeledContent("贴图", value: "F3")
                         LabeledContent("隐藏贴图", value: "⌘H")
                         LabeledContent("显示贴图", value: "⌘⇧H")
+                        LabeledContent("快捷保存", value: "⌘S")
+                        LabeledContent("另存为", value: "⌘⇧S")
                         LabeledContent("取色复制", value: "C")
                         LabeledContent("取色切换", value: "Tab")
                         LabeledContent("选区微调", value: "←↑↓→")
                     }
                 case .save:
                     Form {
+                        HStack {
+                            Text("默认文件夹")
+                            Spacer()
+                            Text(defaultPath)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button("选择…") {
+                                if SavePreferences.pickDirectory(kind: .defaultSave) != nil {
+                                    defaultPath = SavePreferences.displayPath(for: .defaultSave)
+                                }
+                            }
+                        }
+                        HStack {
+                            Text("快捷保存文件夹")
+                            Spacer()
+                            Text(quickPath)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button("选择…") {
+                                if SavePreferences.pickDirectory(kind: .quickSave) != nil {
+                                    quickPath = SavePreferences.displayPath(for: .quickSave)
+                                }
+                            }
+                        }
+                        Picker("格式", selection: $saveFormat) {
+                            Text("PNG").tag(ImageFormat.png.rawValue)
+                            Text("JPEG").tag(ImageFormat.jpeg.rawValue)
+                        }
                         TextField("文件名模板", text: $template)
                         Button("打开保存目录") {
-                            AppBootstrap.shared.coordinator.openLastSaveDirectory()
+                            SavePreferences.openDefaultDirectoryInFinder()
                         }
                         Button("清空上次区域") {
                             AppBootstrap.shared.coordinator.clearCaptureHistory()
@@ -72,7 +107,11 @@ public struct SettingsRootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding()
         }
-        .frame(width: 460, height: 320)
+        .frame(width: 520, height: 360)
+        .onAppear {
+            defaultPath = SavePreferences.displayPath(for: .defaultSave)
+            quickPath = SavePreferences.displayPath(for: .quickSave)
+        }
     }
 }
 
