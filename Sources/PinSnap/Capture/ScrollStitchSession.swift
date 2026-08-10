@@ -169,7 +169,7 @@ public final class ScrollStitchSession: @unchecked Sendable {
         return nil
     }
 
-    /// 首帧整幅；后续只贴底部 advance 条带（对齐 iShot 去粘性后只留新内容），接缝 10px。
+    /// 首帧整幅；后续贴「advance + 10px 重叠」条带（iShot 接缝 10），顶边压进上一帧 10px 渐变。
     private func drawScrollView(maxHeight: Int) -> CGImage? {
         guard let first = frames.first else { return nil }
         let w = first.width
@@ -183,7 +183,7 @@ public final class ScrollStitchSession: @unchecked Sendable {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
 
-        let blend = 10
+        let blend = 10 // iShot `fmov d13, #10.0`
         let firstH = min(first.height, totalH)
         if firstH > 0,
            let piece = first.height == firstH
@@ -195,10 +195,11 @@ public final class ScrollStitchSession: @unchecked Sendable {
 
         for idx in 1..<frames.count {
             let adv = offsets[idx] - offsets[idx - 1]
-            // 条带顶边紧接已拼内容底：firstH + sum(advances before this)
-            let yTop = first.height + offsets[idx - 1]
-            guard adv > 0, yTop < totalH,
-                  let strip = ScrollStitcher.contentStrip(frame: frames[idx], advance: adv)
+            guard adv > 0 else { continue }
+            let yTop = max(0, first.height + offsets[idx - 1] - blend)
+            guard yTop < totalH else { break }
+            let stripH = min(adv + blend, frames[idx].height)
+            guard let strip = ScrollStitcher.contentStrip(frame: frames[idx], advance: stripH)
             else { continue }
             let drawH = min(strip.height, totalH - yTop)
             guard drawH > 0,

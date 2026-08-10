@@ -203,11 +203,10 @@ public enum ScrollStitcher {
         return ctx.makeImage()
     }
 
-    /// iShot 推进量（MXClipView @ 0x100035da0）：
-    /// 1) `sameArr` 计顶/底连续匹配 → 粘性条带 f08/f0c
-    /// 2) 在内容区找「与邻行不同」的特征行，再到上一帧同带搜索
-    /// 3) advance = yPrev - yNext
-    /// `hint` 保留 API，不参与计算。
+    /// iShot 推进量（MXClipView `screenShotsAtScrollScreenshots`）：
+    /// 1. 同下标 `sameArr` 计顶/底粘性 → f08/f0c
+    /// 2. 内容区找指纹行，在上一帧从**同下标**起向下搜首个命中 + 邻行校验 → advance（失败默认 10）
+    /// 3. 仅在 advance±窗口内用重叠带 MAD 精修（避免全局 MAD 估错）
     public static func measureAdvance(
         previous: CGImage,
         next: CGImage,
@@ -229,62 +228,226 @@ public enum ScrollStitcher {
         let minAdv = max(minAdvancePixels, h / 100)
         let stepX = max(1, prev.width / 64)
 
-        // f08 / f0c：顶底 sameArr 连续匹配（粘性 chrome）
         let stickyTop = countEdgeSameRows(prev: prev, next: nxt, fromTop: true, stepX: stepX)
         let stickyBot = countEdgeSameRows(prev: prev, next: nxt, fromTop: false, stepX: stepX)
         let lo = stickyTop
         let hi = h - stickyBot
-        guard hi - lo > 24 else { return nil }
-
-        // 特征行投票：多探针取众数，避免单行误匹配
-        var votes: [Int: Int] = [:]
         let span = hi - lo
-        let strideY = max(1, span / 20)
-        var y = lo + 4
-        while y < hi - 4 {
-            if isFingerprintRow(nxt, y: y, stepX: stepX),
-               let yPrev = findSameRow(
-                haystack: prev, needle: nxt, needleY: y,
-                lo: lo, hi: hi, stepX: stepX
-               ) {
-                let adv = yPrev - y
-                if adv >= minAdv, adv <= span - 4 {
-                    votes[adv, default: 0] += 1
-                }
-            }
-            y += strideY
+        guard span > 24 else { return nil }
+        let maxAdv = max(minAdv, span - max(16, span / 8))
+        guard minAdv <= maxAdv else { return nil }
+
+        // iShot：特征行位移为主；否则最大高置信重叠；都失败则拒接（不用默认 10 硬凑）
+        if let finger = advanceByFingerprint(
+            prev: prev, next: nxt, lo: lo, hi: hi,
+            minAdv: minAdv, maxAdv: maxAdv, stepX: stepX
+        ) {
+            return refineAdvanceByOverlapMAD(
+                prev: prev, next: nxt, lo: lo, hi: hi,
+                center: finger, window: 14,
+                minAdv: minAdv, maxAdv: maxAdv, stepX: stepX
+            )
         }
 
-        if let best = votes.max(by: { lhs, rhs in
-            if lhs.value != rhs.value { return lhs.value < rhs.value }
-            return lhs.key > rhs.key // 同分取更大 advance，减少叠字
-        }), best.value >= 2 {
-            return best.key
-        }
-        if let only = votes.max(by: { $0.value < $1.value }), only.value >= 1 {
-            return only.key
+        if let byOverlap = advanceByMaxOverlap(
+            prev: prev, next: nxt, lo: lo, hi: hi,
+            minAdv: minAdv, maxAdv: maxAdv, stepX: stepX
+        ) {
+            return refineAdvanceByOverlapMAD(
+                prev: prev, next: nxt, lo: lo, hi: hi,
+                center: byOverlap, window: 10,
+                minAdv: minAdv, maxAdv: maxAdv, stepX: stepX
+            )
         }
 
-        // 回退：内容区最大重叠（next 顶 ↔ prev 底），再扣粘性
-        let minOverlap = max(16, span / 8)
-        let maxOverlap = span - minAdv
-        guard minOverlap <= maxOverlap else { return nil }
-        var overlap = 0
-        var k = maxOverlap
-        while k >= minOverlap {
-            if sameArrBand(prev: prev, next: nxt, prevStart: h - stickyBot - k, nextStart: stickyTop, length: k, stepX: stepX) {
-                overlap = k
-                break
-            }
-            k -= 1
-        }
-        guard overlap >= minOverlap else { return nil }
-        let advance = span - overlap
-        guard advance >= minAdv else { return nil }
-        return advance
+        return nil
     }
 
-    /// 顶或底连续 `sameArr` 行数。
+    /// 最大重叠（最小 advance）且 sameArr 行命中率 ≥ 0.88——偏向缝紧，防空洞。
+    private static func advanceByMaxOverlap(
+        prev: GrayImage,
+        next: GrayImage,
+        lo: Int,
+        hi: Int,
+        minAdv: Int,
+        maxAdv: Int,
+        stepX: Int
+    ) -> Int? {
+        let span = hi - lo
+        let minOverlap = span - maxAdv
+        let maxOverlap = span - minAdv
+        guard minOverlap <= maxOverlap else { return nil }
+        var k = maxOverlap
+        while k >= minOverlap {
+            let ratio = overlapSameArrRatio(
+                prev: prev, next: next,
+                prevStart: hi - k, nextStart: lo,
+                length: k, stepX: stepX
+            )
+            if ratio >= 0.88 {
+                return span - k
+            }
+            k -= max(1, k / 64)
+        }
+        return nil
+    }
+
+    private static func overlapSameArrRatio(
+        prev: GrayImage,
+        next: GrayImage,
+        prevStart: Int,
+        nextStart: Int,
+        length: Int,
+        stepX: Int
+    ) -> Double {
+        let stepY = max(1, length / 48)
+        var ok = 0
+        var total = 0
+        var i = 0
+        while i < length {
+            total += 1
+            if sameArrRow(
+                prev: prev, next: next,
+                prevY: prevStart + i, nextY: nextStart + i,
+                stepX: stepX
+            ) {
+                ok += 1
+            }
+            i += stepY
+        }
+        return total == 0 ? 0 : Double(ok) / Double(total)
+    }
+
+    /// 特征行：从同下标向下搜首个 sameArr + 邻行校验；多探针取众数，同分取更小。
+    private static func advanceByFingerprint(
+        prev: GrayImage,
+        next: GrayImage,
+        lo: Int,
+        hi: Int,
+        minAdv: Int,
+        maxAdv: Int,
+        stepX: Int
+    ) -> Int? {
+        var votes: [Int: Int] = [:]
+        let span = hi - lo
+        let strideY = max(1, span / 28)
+        var yNext = lo + 6
+        while yNext < hi - 6 {
+            defer { yNext += strideY }
+            guard isFingerprintRow(next, y: yNext, stepX: stepX) else { continue }
+            // iShot：从指纹下标起在 prev 中向下搜
+            var yPrev = yNext
+            var found: Int?
+            while yPrev < hi {
+                let adv = yPrev - yNext
+                if adv > maxAdv { break }
+                if adv >= minAdv,
+                   sameArrRow(prev: prev, next: next, prevY: yPrev, nextY: yNext, stepX: stepX),
+                   verifyNeighborRows(
+                    prev: prev, next: next,
+                    yPrev: yPrev, yNext: yNext,
+                    lo: lo, hi: hi, stepX: stepX
+                   ) {
+                    found = adv
+                    break
+                }
+                yPrev += 1
+            }
+            if let adv = found {
+                votes[adv, default: 0] += 1
+            }
+        }
+        guard let best = votes.max(by: { lhs, rhs in
+            if lhs.value != rhs.value { return lhs.value < rhs.value }
+            return lhs.key > rhs.key // 同分取更小 advance
+        }), best.value >= 1 else {
+            return nil
+        }
+        return best.key
+    }
+
+    /// 仅在 center±window 内最小化重叠带 MAD。
+    private static func refineAdvanceByOverlapMAD(
+        prev: GrayImage,
+        next: GrayImage,
+        lo: Int,
+        hi: Int,
+        center: Int,
+        window: Int,
+        minAdv: Int,
+        maxAdv: Int,
+        stepX: Int
+    ) -> Int {
+        let span = hi - lo
+        let loA = max(minAdv, center - window)
+        let hiA = min(maxAdv, center + window)
+        var bestA = center
+        var bestMAD = Double.infinity
+        for advance in loA...hiA {
+            let overlap = span - advance
+            guard overlap >= 12 else { continue }
+            let mad = overlapBandMAD(
+                prev: prev, next: next,
+                prevStart: lo + advance, nextStart: lo,
+                length: overlap, stepX: stepX
+            )
+            // 同分偏小 advance，避免精修往大空洞跑
+            if mad < bestMAD - 0.05
+                || (abs(mad - bestMAD) <= 0.05 && advance < bestA) {
+                bestMAD = mad
+                bestA = advance
+            }
+        }
+        return bestA
+    }
+
+    private static func overlapBandMAD(
+        prev: GrayImage,
+        next: GrayImage,
+        prevStart: Int,
+        nextStart: Int,
+        length: Int,
+        stepX: Int
+    ) -> Double {
+        let stepY = max(1, length / 48)
+        var sad: Int64 = 0
+        var count = 0
+        var i = 0
+        while i < length {
+            var x = 0
+            let w = prev.width
+            while x < w {
+                sad += Int64(abs(Int(prev.pixel(x, prevStart + i)) - Int(next.pixel(x, nextStart + i))))
+                count += 1
+                x += stepX
+            }
+            i += stepY
+        }
+        return count == 0 ? Double.infinity : Double(sad) / Double(count)
+    }
+
+    private static func verifyNeighborRows(
+        prev: GrayImage,
+        next: GrayImage,
+        yPrev: Int,
+        yNext: Int,
+        lo: Int,
+        hi: Int,
+        stepX: Int
+    ) -> Bool {
+        var ok = 0
+        if yPrev > lo, yNext > lo,
+           sameArrRow(prev: prev, next: next, prevY: yPrev - 1, nextY: yNext - 1, stepX: stepX) {
+            ok += 1
+        }
+        if yPrev + 1 < hi, yNext + 1 < hi,
+           sameArrRow(prev: prev, next: next, prevY: yPrev + 1, nextY: yNext + 1, stepX: stepX) {
+            ok += 1
+        }
+        // 两侧都能过更好；至少一侧（对齐 iShot 二次 sameArr）
+        return ok >= 1
+    }
+
     private static func countEdgeSameRows(
         prev: GrayImage,
         next: GrayImage,
@@ -304,7 +467,6 @@ public enum ScrollStitcher {
         return run
     }
 
-    /// iShot：与上下邻行均不同 → 可作指纹。
     private static func isFingerprintRow(_ img: GrayImage, y: Int, stepX: Int) -> Bool {
         guard y > 0, y + 1 < img.height else { return false }
         if sameArrRow(prev: img, next: img, prevY: y, nextY: y - 1, stepX: stepX) { return false }
@@ -312,53 +474,7 @@ public enum ScrollStitcher {
         return true
     }
 
-    private static func findSameRow(
-        haystack: GrayImage,
-        needle: GrayImage,
-        needleY: Int,
-        lo: Int,
-        hi: Int,
-        stepX: Int
-    ) -> Int? {
-        // 优先在 needleY 附近向下搜（滚动后内容上移 → 同行在 prev 更靠下）
-        var y = needleY
-        while y < hi {
-            if sameArrRow(prev: haystack, next: needle, prevY: y, nextY: needleY, stepX: stepX) {
-                return y
-            }
-            y += 1
-        }
-        y = needleY - 1
-        while y >= lo {
-            if sameArrRow(prev: haystack, next: needle, prevY: y, nextY: needleY, stepX: stepX) {
-                return y
-            }
-            y -= 1
-        }
-        return nil
-    }
-
-    private static func sameArrBand(
-        prev: GrayImage,
-        next: GrayImage,
-        prevStart: Int,
-        nextStart: Int,
-        length: Int,
-        stepX: Int
-    ) -> Bool {
-        for i in 0..<length {
-            if !sameArrRow(
-                prev: prev, next: next,
-                prevY: prevStart + i, nextY: nextStart + i,
-                stepX: stepX
-            ) {
-                return false
-            }
-        }
-        return true
-    }
-
-    /// iShot `sameArr:to:`：中点灰度 ±6，再 `sameArrColumn` 列 ±3。
+    /// iShot `sameArr:to:`：沿行抽样，全部 |grayΔ|≤6。
     private static func sameArrRow(
         prev: GrayImage,
         next: GrayImage,
@@ -367,34 +483,17 @@ public enum ScrollStitcher {
         stepX: Int
     ) -> Bool {
         let w = prev.width
-        let sampleX = min(w - 1, max(0, w / 2 + 0x50 / 4))
-        let g0 = Int(prev.pixel(sampleX, prevY))
-        let g1 = Int(next.pixel(sampleX, nextY))
-        if abs(g0 - g1) > sameArrGrayTolerance {
-            return false
-        }
-        return sameArrColumnRow(prev: prev, next: next, prevY: prevY, nextY: nextY, stepX: stepX)
-    }
-
-    /// iShot `sameArrColumn:to:`：列值差 ≤ 3。
-    private static func sameArrColumnRow(
-        prev: GrayImage,
-        next: GrayImage,
-        prevY: Int,
-        nextY: Int,
-        stepX: Int
-    ) -> Bool {
-        let w = prev.width
-        var x = 0
-        var fail = 0
-        var total = 0
-        while x < w {
+        var x = min(w - 1, max(0, 0x50 / 4))
+        let end = max(x + 1, w - max(1, 0x50 / 4))
+        let step = max(1, stepX)
+        var compared = 0
+        while x < end {
             let d = abs(Int(prev.pixel(x, prevY)) - Int(next.pixel(x, nextY)))
-            total += 1
-            if d > sameArrColumnTolerance { fail += 1 }
-            x += stepX
+            if d > sameArrGrayTolerance { return false }
+            compared += 1
+            x += step
         }
-        return fail * 20 <= total
+        return compared > 0
     }
 
     public struct ChainAppendResult: Sendable {
