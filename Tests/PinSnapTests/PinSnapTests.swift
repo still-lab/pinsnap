@@ -236,20 +236,19 @@ final class ScrollStitchTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(measured, trueAdvance - 12)
     }
 
-    /// 快滑丢中间帧：A→C 跨度过大测不到，但经 B 串联应能追赶上（否则只能滑回去才截）。
+    /// 快滑丢中间帧：特征行匹配通常仍能直连；若失败则经 B 串联追赶。
     func testChainAppendRecoversViaIntermediateFrame() throws {
         let w = 72
         let viewH = 120
-        let step = 55 // 单步可测；两步 110 ≈ 92% 高，直连 A→C 会失败
+        let step = 55 // 单步可测；两步 110 ≈ 92% 高
         let content = try XCTUnwrap(Self.makeNoise(width: w, height: viewH + step * 2, seed: 91))
         let a = try XCTUnwrap(Self.cropWindow(content, y: 0, height: viewH))
         let b = try XCTUnwrap(Self.cropWindow(content, y: step, height: viewH))
         let c = try XCTUnwrap(Self.cropWindow(content, y: step * 2, height: viewH))
 
-        XCTAssertNil(
-            ScrollStitcher.measureAdvance(previous: a, next: c, hint: 0),
-            "direct A→C should be too far — reproduces fast-scroll stall"
-        )
+        if let direct = ScrollStitcher.measureAdvance(previous: a, next: c, hint: 0) {
+            XCTAssertEqual(Double(direct), Double(step * 2), accuracy: 16)
+        }
 
         let result = try XCTUnwrap(
             ScrollStitcher.chainAppend(canvas: a, lastFrame: a, incoming: [b, c])

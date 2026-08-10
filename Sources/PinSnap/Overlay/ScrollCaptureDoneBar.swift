@@ -1,15 +1,17 @@
 import AppKit
 import Foundation
 
-/// 长截进行中的操作条：样式对齐 CaptureToolbar（毛玻璃 + 图标按钮）。
+/// 长截操作条：自动滚 / 完成 / 取消（对齐 iShot Stop Scroll + 完成）。
 @MainActor
 final class ScrollCaptureDoneBar: NSPanel {
     var onDone: (() -> Void)?
     var onCancel: (() -> Void)?
+    var onToggleAutoScroll: (() -> Void)?
 
     private let buttonSize: CGFloat = 30
     private let barHeight: CGFloat = 40
-    private let barWidth: CGFloat = 96
+    private let barWidth: CGFloat = 140
+    private var autoButton: NSButton?
 
     init() {
         super.init(
@@ -54,10 +56,22 @@ final class ScrollCaptureDoneBar: NSPanel {
             row.bottomAnchor.constraint(equalTo: chrome.bottomAnchor),
         ])
 
+        let auto = iconButton("arrow.down.to.line", tip: "自动滚动", #selector(autoClicked))
+        autoButton = auto
+        row.addArrangedSubview(auto)
         row.addArrangedSubview(iconButton("checkmark", tip: "完成", #selector(doneClicked)))
         row.addArrangedSubview(iconButton("xmark", tip: "取消", #selector(cancelClicked)))
 
         contentView = chrome
+    }
+
+    func setAutoScrolling(_ on: Bool) {
+        let name = on ? "stop.fill" : "arrow.down.to.line"
+        let tip = on ? "停止滚动" : "自动滚动"
+        let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+        autoButton?.image = NSImage(systemSymbolName: name, accessibilityDescription: tip)?
+            .withSymbolConfiguration(cfg)
+        autoButton?.toolTip = tip
     }
 
     func place(near selection: CGRect, inScreenBounds screen: CGRect) {
@@ -94,4 +108,5 @@ final class ScrollCaptureDoneBar: NSPanel {
 
     @objc private func doneClicked() { onDone?() }
     @objc private func cancelClicked() { onCancel?() }
+    @objc private func autoClicked() { onToggleAutoScroll?() }
 }

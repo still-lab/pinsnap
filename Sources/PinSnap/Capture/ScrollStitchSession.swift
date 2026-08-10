@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// iShot 式滚动拼接会话：帧数组 + Y 偏移数组 + 全宽 SAD 对齐 + 最终 10px 渐变合成。
+/// iShot 式滚动拼接：特征行 `sameArr` 测 advance + 条带拼接（非整帧叠绘）。
 public final class ScrollStitchSession: @unchecked Sendable {
 
     public struct AppendResult: Sendable {
@@ -12,7 +12,6 @@ public final class ScrollStitchSession: @unchecked Sendable {
         public var remainder: [CGImage]
         public var didChange: Bool
         public var hitLimit: Bool
-        /// 本次是否让帧数组增长（idle 结束判定用）
         public var didGrow: Bool
 
         public init(
@@ -36,7 +35,7 @@ public final class ScrollStitchSession: @unchecked Sendable {
         }
     }
 
-    /// 兼容侧栏：用轻量 canvas 只表示当前总高度 / 预览来源。
+    /// 侧栏高度用；预览像素来自 `makeFullImage` / `makePreviewImage`。
     public private(set) var canvas: StitchCanvas
     public var lastFrame: CGImage { frames[frames.count - 1] }
     public private(set) var totalAdvance: Int = 0
@@ -44,13 +43,13 @@ public final class ScrollStitchSession: @unchecked Sendable {
     public var frameCount: Int { frames.count }
     public let width: Int
 
-    /// 帧数组（iShot 0xe28）
+    /// iShot 帧数组
     private var frames: [CGImage] = []
-    /// 各帧顶边距画布顶的像素偏移（iShot 0xe30）
+    /// 各帧顶边相对画布顶的像素偏移
     private var offsets: [Int] = []
 
     public init(firstFrame: CGImage, detectSticky: Bool = false) {
-        _ = detectSticky
+        _ = detectSticky // iShot 不做 sticky；框选避开固定栏
         self.width = firstFrame.width
         self.frames = [firstFrame]
         self.offsets = [0]
@@ -58,70 +57,46 @@ public final class ScrollStitchSession: @unchecked Sendable {
         self.canvas.appendBottom(firstFrame)
     }
 
+    /// 单帧入口（对齐 iShot 每次 `screenShotsAtScrollScreenshots` 进一帧）。
+    @discardableResult
+    public func append(_ frame: CGImage) -> AppendResult {
+        append(incoming: [frame])
+    }
+
     public func append(incoming: [CGImage]) -> AppendResult {
         let countBefore = frames.count
         guard !incoming.isEmpty else {
-            return makeResult(
-                accepted: [], advance: 0, remainder: [],
-                didChange: false, didGrow: false
-            )
+            return makeResult(accepted: [], advance: 0, remainder: [], didChange: false, didGrow: false)
         }
 
         var accepted: [CGImage] = []
         var advanceSum = 0
         var didChange = false
-        var framesIn = incoming.compactMap { ScrollStitcher.fitted($0, toMatch: lastFrame) }
+        let framesIn = incoming.compactMap { ScrollStitcher.fitted($0, toMatch: lastFrame) }
         guard !framesIn.isEmpty else {
-            return makeResult(
-                accepted: [], advance: 0, remainder: [],
-                didChange: false, didGrow: false
-            )
+            return makeResult(accepted: [], advance: 0, remainder: [], didChange: false, didGrow: false)
         }
 
-        var remainder: [CGImage] = []
         var i = 0
         while i < framesIn.count {
             if hitLimit() { break }
             let frame = framesIn[i]
 
-            // 相同帧不保留
+            // 相同帧不保留（iShot isEqual 路径）
             if !ScrollStitcher.looksDifferent(lastFrame, frame, threshold: 2.5) {
                 i += 1
                 continue
             }
 
-            // 三帧滑动窗口：先比 last↔frame；失败则试 frames[n-2]↔last 与 last↔frame 链路
-            guard let advance = resolveAdvance(for: frame) else {
-                remainder = Array(framesIn[i...])
-                break
-            }
-
-            if advance < 0 {
-                // 上滑：回退偏移（裁逻辑高度）
-                let up = -advance
-                let maxTrim = max(0, contentHeight() - frame.height)
-                let trim = min(up, maxTrim)
-                if trim > 0, frames.count > 1 {
-                    frames.removeLast()
-                    offsets.removeLast()
-                    totalAdvance = max(0, totalAdvance - trim)
-                    rebuildCanvasPreview()
-                    didChange = true
-                }
-                // 同步当前视口帧
-                if frames.isEmpty {
-                    frames = [frame]
-                    offsets = [0]
-                } else {
-                    frames[frames.count - 1] = frame
-                }
-                didChange = true
+            // 只接受向下推进（事件层已忽略 Δ≥0；此处不再做上滑回退）
+            guard let advance = resolveDownAdvance(for: frame), advance >= ScrollStitcher.minAdvancePixels else {
+                // 匹配失败：丢弃该帧，继续尝试后续（不桥接堆积）
                 i += 1
                 continue
             }
 
             let newTop = (offsets.last ?? 0) + advance
-            if newTop + frame.height > StitchCanvas.maxOutputHeight
+            if contentHeight() + advance > StitchCanvas.maxOutputHeight
                 || frames.count >= ScrollStitcher.maxFrames {
                 break
             }
@@ -132,7 +107,10 @@ public final class ScrollStitchSession: @unchecked Sendable {
             accepted.append(frame)
             advanceSum += advance
             didChange = true
-            appendStripToPreviewCanvas(frame: frame, advance: advance)
+            // 预览高度：只追加新条带（侧栏用）；最终/侧栏像素图走 drawScrollView
+            if let strip = ScrollStitcher.contentStrip(frame: frame, advance: advance) {
+                canvas.appendBottom(strip)
+            }
             i += 1
         }
 
@@ -140,17 +118,62 @@ public final class ScrollStitchSession: @unchecked Sendable {
         return makeResult(
             accepted: accepted,
             advance: advanceSum,
-            remainder: remainder.isEmpty && i >= framesIn.count ? [] : (remainder.isEmpty ? Array(framesIn[i...]) : remainder),
+            remainder: [],
             didChange: didChange,
             didGrow: grew
         )
     }
 
-    /// iShot drawScrollView：按偏移绘制整帧，接缝约 10px alpha 渐变。
+    /// 最终图：条带拼接（非整帧叠绘）。
     public func makeFullImage() -> CGImage? {
+        drawScrollView(maxHeight: StitchCanvas.maxOutputHeight)
+    }
+
+    /// 侧栏预览：同算法，限制高度以免卡顿。
+    public func makePreviewImage(maxHeight: Int = 2400) -> CGImage? {
+        guard let full = drawScrollView(maxHeight: maxHeight) else { return nil }
+        let maxW = 280
+        guard full.width > maxW else { return full }
+        let scale = CGFloat(maxW) / CGFloat(full.width)
+        let h = max(1, Int((CGFloat(full.height) * scale).rounded()))
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil, width: maxW, height: h,
+            bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return full }
+        ctx.interpolationQuality = .medium
+        ctx.draw(full, in: CGRect(x: 0, y: 0, width: maxW, height: h))
+        return ctx.makeImage() ?? full
+    }
+
+    // MARK: - Private
+
+    /// 三帧滑动窗口（只向下）。
+    private func resolveDownAdvance(for frame: CGImage) -> Int? {
+        if let d = ScrollStitcher.measureAdvance(previous: lastFrame, next: frame) {
+            return d
+        }
+        guard frames.count >= 2 else { return nil }
+        let prev2 = frames[frames.count - 2]
+        let prev1 = frames[frames.count - 1]
+        if ScrollStitcher.measureAdvance(previous: prev2, next: prev1) != nil,
+           let d = ScrollStitcher.measureAdvance(previous: prev2, next: frame) {
+            let removedAdv = offsets[offsets.count - 1] - offsets[offsets.count - 2]
+            frames.removeLast()
+            offsets.removeLast()
+            totalAdvance = max(0, totalAdvance - max(0, removedAdv))
+            rebuildCanvasHeight()
+            return d
+        }
+        return nil
+    }
+
+    /// 首帧整幅；后续只贴底部 advance 条带（对齐 iShot 去粘性后只留新内容），接缝 10px。
+    private func drawScrollView(maxHeight: Int) -> CGImage? {
         guard let first = frames.first else { return nil }
         let w = first.width
-        let totalH = min(StitchCanvas.maxOutputHeight, contentHeight())
+        let totalH = min(maxHeight, contentHeight())
         guard totalH > 0 else { return nil }
 
         let cs = CGColorSpaceCreateDeviceRGB()
@@ -161,25 +184,30 @@ public final class ScrollStitchSession: @unchecked Sendable {
         ) else { return nil }
 
         let blend = 10
-        for (idx, frame) in frames.enumerated() {
-            let yTop = offsets[idx]
-            let drawH = min(frame.height, totalH - yTop)
+        let firstH = min(first.height, totalH)
+        if firstH > 0,
+           let piece = first.height == firstH
+            ? first
+            : first.cropping(to: CGRect(x: 0, y: 0, width: w, height: firstH).integral) {
+            ctx.setAlpha(1)
+            ctx.draw(piece, in: CGRect(x: 0, y: totalH - firstH, width: w, height: firstH))
+        }
+
+        for idx in 1..<frames.count {
+            let adv = offsets[idx] - offsets[idx - 1]
+            // 条带顶边紧接已拼内容底：firstH + sum(advances before this)
+            let yTop = first.height + offsets[idx - 1]
+            guard adv > 0, yTop < totalH,
+                  let strip = ScrollStitcher.contentStrip(frame: frames[idx], advance: adv)
+            else { continue }
+            let drawH = min(strip.height, totalH - yTop)
             guard drawH > 0,
-                  let piece = frame.height == drawH
-                    ? frame
-                    : frame.cropping(to: CGRect(x: 0, y: 0, width: w, height: drawH).integral)
+                  let piece = strip.height == drawH
+                    ? strip
+                    : strip.cropping(to: CGRect(x: 0, y: 0, width: w, height: drawH).integral)
             else { continue }
 
-            // CGContext：y=0 在底；画布顶 = totalH
-            if idx == 0 || blend <= 0 || yTop == 0 {
-                let cgY = totalH - yTop - drawH
-                ctx.setAlpha(1)
-                ctx.draw(piece, in: CGRect(x: 0, y: cgY, width: w, height: drawH))
-                continue
-            }
-
             let seam = min(blend, drawH)
-            // 顶部 seam 行：fraction 0→1（越往下越实）
             if seam > 0,
                let topBand = piece.cropping(to: CGRect(x: 0, y: 0, width: w, height: seam).integral) {
                 for row in 0..<seam {
@@ -202,69 +230,20 @@ public final class ScrollStitchSession: @unchecked Sendable {
             }
         }
         ctx.setAlpha(1)
-        ScrollStitcher.clearGrayCache()
         return ctx.makeImage()
     }
 
-    // MARK: - Private
-
-    private func resolveAdvance(for frame: CGImage) -> Int? {
-        // 直接相邻匹配
-        if let d = ScrollStitcher.signedScrollDelta(previous: lastFrame, next: frame) {
-            return d
-        }
-        // 三帧窗口：若存在 F[n-2], 尝试 F[n-1]↔F[n] 已失败时，看 F[n-2]↔F[n-1] 是否仍成立并丢弃坏帧
-        guard frames.count >= 2 else { return nil }
-        let prev2 = frames[frames.count - 2]
-        let prev1 = frames[frames.count - 1]
-        if ScrollStitcher.signedScrollDelta(previous: prev2, next: prev1) != nil,
-           let d = ScrollStitcher.signedScrollDelta(previous: prev1, next: frame) {
-            return d
-        }
-        // 后移：直接把新帧接到 prev2（跳过损坏的中间态）
-        if let d = ScrollStitcher.signedScrollDelta(previous: prev2, next: frame) {
-            // 回退一帧再接
-            if frames.count > 1 {
-                let removedAdv = offsets[offsets.count - 1] - offsets[offsets.count - 2]
-                frames.removeLast()
-                offsets.removeLast()
-                totalAdvance = max(0, totalAdvance - max(0, removedAdv))
-                rebuildCanvasPreview()
-            }
-            return d
-        }
-        return nil
-    }
-
+    /// 条带模型：首帧高 + 累计 advance（`offsets.last`）。
     private func contentHeight() -> Int {
-        guard let last = frames.last, let off = offsets.last else { return 0 }
-        return off + last.height
+        guard let first = frames.first, let off = offsets.last else { return 0 }
+        return first.height + off
     }
 
     private func hitLimit() -> Bool {
         contentHeight() >= StitchCanvas.maxOutputHeight || frames.count >= ScrollStitcher.maxFrames
     }
 
-    private func appendStripToPreviewCanvas(frame: CGImage, advance: Int) {
-        if let strip = ScrollStitcher.contentStrip(frame: frame, advance: advance) {
-            if !canvas.bottomMatches(strip) {
-                var use = advance
-                var s = strip
-                let lead = min(16, max(4, use / 4))
-                while use >= ScrollStitcher.minAdvancePixels,
-                      canvas.bottomMatchesStripTop(s, rows: lead, threshold: 10),
-                      let nextStrip = ScrollStitcher.contentStrip(frame: frame, advance: use - lead) {
-                    use -= lead
-                    s = nextStrip
-                }
-                if use >= ScrollStitcher.minAdvancePixels, !canvas.bottomMatches(s) {
-                    canvas.appendBottom(s)
-                }
-            }
-        }
-    }
-
-    private func rebuildCanvasPreview() {
+    private func rebuildCanvasHeight() {
         canvas = StitchCanvas(width: width)
         guard let first = frames.first else { return }
         canvas.appendBottom(first)
@@ -284,7 +263,7 @@ public final class ScrollStitchSession: @unchecked Sendable {
         didGrow: Bool
     ) -> AppendResult {
         AppendResult(
-            preview: canvas.makePreview(),
+            preview: makePreviewImage(),
             lastFrame: lastFrame,
             acceptedFrames: accepted,
             totalAdvance: advance,

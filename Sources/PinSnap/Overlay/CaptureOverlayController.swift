@@ -44,20 +44,21 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private var toolbar: CaptureToolbar?
     fileprivate var isScrollCapturing = false
     private var scrollPreviewCanvas: CGImage?
-    /// 尚未拼上的桥接帧（快滑中间态），供 Session 追赶。
-    private var scrollBridgeFrames: [CGImage] = []
     private var scrollTask: Task<Void, Never>?
     private var scrollWheelMonitor: Any?
     /// 长截穿透时本地 monitor 常收不到，用全局 Esc/右键结束并导出。
     private var scrollGlobalKeyMonitor: Any?
     private var scrollGlobalRightClickMonitor: Any?
-    /// 空闲 60ms → 截末帧并自动导出（对齐 iShot `scrollFinished`）。
+    /// iShot：停滚 60ms → scrollFinished 再截一帧（不退出）。
     private var scrollIdleTimer: Timer?
     private var scrollCaptureBusy = false
     private var scrollNeedsRecapture = false
+    /// iShot `startAutoScroll:`：定时 CGEvent 注入滚轮。
+    private var scrollAutoTimer: Timer?
+    private var isAutoScrolling = false
     private var scrollSidePreview: ScrollCapturePreview?
     private var scrollDoneBar: ScrollCaptureDoneBar?
-    /// 有状态拼接会话（O(1) append + 侧栏跟长）。
+    /// 有状态拼接会话（帧数组 + 偏移）。
     private var scrollStitchSession: ScrollStitchSession?
     /// 长截完成后的浮动预览（全分辨率另存）。
     private var isFloatingResult = false
@@ -990,14 +991,15 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     // MARK: - Scroll capture (long screenshot)
-    // 采帧：deltaY<0 立刻截；≥0 忽略；停滚可补一帧。
-    // 结束：仅完成 / 取消 / Esc / 右键 / Enter（不停滚自动退出）。
+    // 完全对齐 iShot MXClipView（r2 核验）：
+    // 100ms 首帧；deltaY<0 立刻截 + 重置 60ms；Δ≥0 忽略；idle 只补截不退出；
+    // 帧数组+SAD+10px blend；自动滚 CGEvent(line) 注入；显式完成才导出。
 
-    private static let scrollBridgeMaxFrames = 12
     private static let scrollFirstFrameDelayNs: UInt64 = 100_000_000
-    /// 停滚后补截稳定帧，绝不因此结束会话。
-    private static let scrollSettleInterval: TimeInterval = 0.2
+    private static let scrollSettleInterval: TimeInterval = 0.06
     private static let scrollDeltaNoise: CGFloat = 0.5
+    private static let scrollAutoInterval: TimeInterval = 0.12
+    private static let scrollAutoWheelLines: Int32 = 3
 
     private enum ScrollCaptureTrigger {
         case firstFrame
@@ -1023,10 +1025,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         draftShape = nil
 
         scrollPreviewCanvas = nil
-        scrollBridgeFrames = []
         scrollStitchSession = nil
         scrollCaptureBusy = false
         scrollNeedsRecapture = false
+        stopAutoScroll()
         invalidateScrollIdleTimer()
         removeScrollWheelMonitor()
         removeScrollGlobalEndMonitors()
@@ -1038,7 +1040,6 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             panel.ignoresMouseEvents = true
         }
         syncLayers()
-        // 长截中隐藏标注工具栏，只留完成/取消
         toolbar?.orderOut(nil)
         installScrollWheelMonitor()
         installScrollGlobalEndMonitors()
@@ -1046,7 +1047,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         presentScrollDoneBar(beside: selection)
 
         PinSnapLog.capture.info(
-            "scroll start rect=\(Int(selection.logicalRect.width))x\(Int(selection.logicalRect.height)) ishot-pipeline"
+            "scroll start rect=\(Int(selection.logicalRect.width))x\(Int(selection.logicalRect.height)) ishot"
         )
 
         scrollTask?.cancel()
@@ -1111,7 +1112,6 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         scrollIdleTimer = nil
     }
 
-    /// 停滚后补一帧；不结束。
     private func resetScrollIdleTimer() {
         invalidateScrollIdleTimer()
         let timer = Timer(timeInterval: Self.scrollSettleInterval, repeats: false) { [weak self] _ in
@@ -1125,16 +1125,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
 
     private func handleScrollSettleTimeout() async {
         guard isScrollCapturing else { return }
-        await waitUntilCaptureIdle()
-        guard isScrollCapturing else { return }
         await captureScrollFrame(trigger: .settle)
-        // 明确：此处绝不 stopScrollCapture
-    }
-
-    private func waitUntilCaptureIdle() async {
-        while isScrollCapturing, scrollCaptureBusy {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
     }
 
     private func handleScrollWheelForCapture(_ event: NSEvent) {
@@ -1143,22 +1134,32 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         guard abs(deltaY) > Self.scrollDeltaNoise else { return }
         guard deltaY < 0 else { return }
 
+        resetScrollIdleTimer()
+        if scrollCaptureBusy {
+            scrollNeedsRecapture = true
+            return
+        }
         Task { @MainActor in
-            await self.waitUntilCaptureIdle()
-            guard self.isScrollCapturing else { return }
             await self.captureScrollFrame(trigger: .wheel)
-            guard self.isScrollCapturing else { return }
-            self.resetScrollIdleTimer()
         }
     }
 
     private func captureScrollFrame(trigger: ScrollCaptureTrigger) async {
-        guard isScrollCapturing else { return }
-        await waitUntilCaptureIdle()
-        guard isScrollCapturing, !scrollCaptureBusy else { return }
+        guard isScrollCapturing, !scrollCaptureBusy else {
+            if isScrollCapturing { scrollNeedsRecapture = true }
+            return
+        }
 
         scrollCaptureBusy = true
-        defer { scrollCaptureBusy = false }
+        defer {
+            scrollCaptureBusy = false
+            if isScrollCapturing, scrollNeedsRecapture {
+                scrollNeedsRecapture = false
+                Task { @MainActor in
+                    await self.captureScrollFrame(trigger: .wheel)
+                }
+            }
+        }
 
         guard let selection, let capture = captureRegion else { return }
 
@@ -1173,9 +1174,9 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         do {
             let image = try await capture(selection, exclude)
             if scrollStitchSession == nil {
-                let session = ScrollStitchSession(firstFrame: image, detectSticky: false)
+                let session = ScrollStitchSession(firstFrame: image)
                 scrollStitchSession = session
-                scrollPreviewCanvas = session.canvas.makePreview()
+                scrollPreviewCanvas = session.makePreviewImage()
                 scrollSidePreview?.update(preview: scrollPreviewCanvas)
                 syncLayers()
                 PinSnapLog.capture.info("scroll seed \(image.width)x\(image.height)")
@@ -1187,36 +1188,11 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         }
     }
 
-    /// 门控后送入 Session。
     private func ingestScrollFrame(_ image: CGImage) async {
         guard let session = scrollStitchSession else { return }
-        let ref = session.lastFrame
-
-        // iShot：相同帧不保留
-        if !ScrollStitcher.looksDifferent(ref, image, threshold: 2.5) {
-            return
-        }
-
-        let gated = ScrollStitcher.passesScrollFrameGate(previous: ref, next: image)
-        var incoming = scrollBridgeFrames
-        if gated {
-            incoming.append(image)
-        } else {
-            scrollBridgeFrames.append(image)
-            if scrollBridgeFrames.count > Self.scrollBridgeMaxFrames {
-                scrollBridgeFrames.removeFirst(scrollBridgeFrames.count - Self.scrollBridgeMaxFrames)
-            }
-            incoming = scrollBridgeFrames
-            PinSnapLog.capture.info("scroll gate reject bridge=\(self.scrollBridgeFrames.count)")
-        }
-
-        guard !incoming.isEmpty else { return }
-
         let result = await Task.detached(priority: .userInitiated) {
-            session.append(incoming: incoming)
+            session.append(image)
         }.value
-
-        scrollBridgeFrames = Array(result.remainder.suffix(Self.scrollBridgeMaxFrames))
 
         if result.didChange {
             scrollPreviewCanvas = result.preview
@@ -1224,10 +1200,9 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             syncLayers()
             refreshScrollSidePreviewAvoidance()
             PinSnapLog.capture.info(
-                "scroll advance=\(result.totalAdvance) accepted=\(session.acceptedCount) canvasH=\(session.canvas.height) bridge=\(self.scrollBridgeFrames.count)"
+                "scroll advance=\(result.totalAdvance) frames=\(session.frameCount) canvasH=\(session.canvas.height)"
             )
         }
-
         if result.hitLimit {
             stopScrollCapture(commit: true)
         }
@@ -1274,15 +1249,70 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             self?.stopScrollCapture(commit: false)
             self?.cancel()
         }
+        bar.onToggleAutoScroll = { [weak self] in
+            self?.toggleAutoScroll()
+        }
+        bar.setAutoScrolling(false)
         if let screen = geometry.screen(id: selection.screenID) {
             bar.place(near: selection.logicalRect, inScreenBounds: screen.logicalFrame)
         }
         scrollDoneBar = bar
     }
 
+    private func toggleAutoScroll() {
+        if isAutoScrolling { stopAutoScroll() } else { startAutoScroll() }
+    }
+
+    private func startAutoScroll() {
+        guard isScrollCapturing else { return }
+        stopAutoScroll()
+        isAutoScrolling = true
+        scrollDoneBar?.setAutoScrolling(true)
+        if let selection {
+            let mid = CGPoint(x: selection.logicalRect.midX, y: selection.logicalRect.midY)
+            let cgRect = ScreenGeometry.cocoaToCGWindowRect(
+                CGRect(x: mid.x, y: mid.y, width: 1, height: 1)
+            )
+            let move = CGEvent(
+                mouseEventSource: nil,
+                mouseType: .mouseMoved,
+                mouseCursorPosition: CGPoint(x: cgRect.midX, y: cgRect.midY),
+                mouseButton: .left
+            )
+            move?.post(tap: CGEventTapLocation.cghidEventTap)
+        }
+        let timer = Timer(timeInterval: Self.scrollAutoInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.postAutoScrollWheel()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        scrollAutoTimer = timer
+        postAutoScrollWheel()
+    }
+
+    private func stopAutoScroll() {
+        scrollAutoTimer?.invalidate()
+        scrollAutoTimer = nil
+        isAutoScrolling = false
+        scrollDoneBar?.setAutoScrolling(false)
+    }
+
+    private func postAutoScrollWheel() {
+        guard isScrollCapturing, isAutoScrolling else { return }
+        guard let event = CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .line,
+            wheelCount: 1,
+            wheel1: -Self.scrollAutoWheelLines,
+            wheel2: 0,
+            wheel3: 0
+        ) else { return }
+        event.post(tap: CGEventTapLocation.cghidEventTap)
+    }
+
     private func refreshScrollSidePreviewAvoidance() {
-        guard let preview = scrollSidePreview else { return }
-        preview.setAvoiding(nil)
+        scrollSidePreview?.setAvoiding(nil)
     }
 
     private func dismissScrollSidePreview() {
@@ -1300,20 +1330,17 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private func stopScrollCapture(commit: Bool) {
         scrollTask?.cancel()
         scrollTask = nil
+        stopAutoScroll()
         invalidateScrollIdleTimer()
         removeScrollWheelMonitor()
         removeScrollGlobalEndMonitors()
         dismissScrollSidePreview()
         dismissScrollDoneBar()
 
-        let wasActive = isScrollCapturing
-        if !wasActive {
-            return
-        }
+        guard isScrollCapturing else { return }
 
         let session = scrollStitchSession
         scrollPreviewCanvas = nil
-        scrollBridgeFrames = []
         scrollStitchSession = nil
         scrollCaptureBusy = false
         scrollNeedsRecapture = false
@@ -1350,7 +1377,6 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         }
 
         ScrollStitcher.clearGrayCache()
-        // 取消长截：回到标注态
         for panel in panels {
             panel.ignoresMouseEvents = false
             panel.orderFrontRegardless()
