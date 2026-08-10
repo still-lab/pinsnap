@@ -129,21 +129,24 @@ public final class ScrollStitchSession: @unchecked Sendable {
         drawScrollView(maxHeight: StitchCanvas.maxOutputHeight)
     }
 
-    /// 侧栏预览：同算法，限制高度以免卡顿。
+    /// 侧栏预览：整图缩放塞进限高（不再只截前 2400px，否则看起来像「截到一定长度就停」）。
     public func makePreviewImage(maxHeight: Int = 2400) -> CGImage? {
-        guard let full = drawScrollView(maxHeight: maxHeight) else { return nil }
+        guard let full = drawScrollView(maxHeight: StitchCanvas.maxOutputHeight) else { return nil }
         let maxW = 280
-        guard full.width > maxW else { return full }
-        let scale = CGFloat(maxW) / CGFloat(full.width)
-        let h = max(1, Int((CGFloat(full.height) * scale).rounded()))
+        let scaleW = CGFloat(maxW) / CGFloat(max(1, full.width))
+        let scaleH = CGFloat(maxHeight) / CGFloat(max(1, full.height))
+        let scale = min(1, scaleW, scaleH)
+        let outW = max(1, Int((CGFloat(full.width) * scale).rounded()))
+        let outH = max(1, Int((CGFloat(full.height) * scale).rounded()))
+        if outW == full.width, outH == full.height { return full }
         let cs = CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(
-            data: nil, width: maxW, height: h,
+            data: nil, width: outW, height: outH,
             bitsPerComponent: 8, bytesPerRow: 0, space: cs,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return full }
         ctx.interpolationQuality = .medium
-        ctx.draw(full, in: CGRect(x: 0, y: 0, width: maxW, height: h))
+        ctx.draw(full, in: CGRect(x: 0, y: 0, width: outW, height: outH))
         return ctx.makeImage() ?? full
     }
 

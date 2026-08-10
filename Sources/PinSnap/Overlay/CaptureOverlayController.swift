@@ -1163,9 +1163,9 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
 
         guard let selection, let capture = captureRegion else { return }
 
+        // 高度触顶才自动完成；帧数只作安全阀（已放宽），避免中途误停
         if let session = scrollStitchSession,
-           session.acceptedCount >= ScrollStitcher.maxFrames
-            || session.canvas.height >= StitchCanvas.maxOutputHeight {
+           session.canvas.height >= StitchCanvas.maxOutputHeight {
             stopScrollCapture(commit: true)
             return
         }

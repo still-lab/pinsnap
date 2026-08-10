@@ -5,7 +5,8 @@ import Vision
 /// v1.3 长截图垂直拼接（对齐 iShot：`sameArr`/`sameArrColumn` 行匹配，非 MAD 搜索）。
 public enum ScrollStitcher {
     public static let maxOutputHeight = 65_536
-    public static let maxFrames = 240
+    /// 滚轮几乎每动一帧；240 很容易触顶并自动结束。以高度上限为主。
+    public static let maxFrames = 2_000
     public static let minAdvancePixels = 8
     public static let defaultOverlapHint = 80
     public static let maxHorizontalDrift = 6
@@ -204,9 +205,9 @@ public enum ScrollStitcher {
     }
 
     /// iShot 推进量（MXClipView `screenShotsAtScrollScreenshots`）：
-    /// 1. 同下标 `sameArr` 计顶/底粘性 → f08/f0c
-    /// 2. 内容区找指纹行，在上一帧从**同下标**起向下搜首个命中 + 邻行校验 → advance（失败默认 10）
-    /// 3. 仅在 advance±窗口内用重叠带 MAD 精修（避免全局 MAD 估错）
+    /// 1. 同下标 `sameArr` 计顶/底粘性 → f08/f0c（过大则封顶，避免末段内容带被吃光）
+    /// 2. 指纹行 + 邻行校验 → advance
+    /// 3. 失败时小步进 MAD（对齐失败默认 ~10），避免滚到页尾附近无法再增长
     public static func measureAdvance(
         previous: CGImage,
         next: CGImage,
@@ -228,8 +229,13 @@ public enum ScrollStitcher {
         let minAdv = max(minAdvancePixels, h / 100)
         let stepX = max(1, prev.width / 64)
 
-        let stickyTop = countEdgeSameRows(prev: prev, next: nxt, fromTop: true, stepX: stepX)
-        let stickyBot = countEdgeSameRows(prev: prev, next: nxt, fromTop: false, stepX: stepX)
+        var stickyTop = countEdgeSameRows(prev: prev, next: nxt, fromTop: true, stepX: stepX)
+        var stickyBot = countEdgeSameRows(prev: prev, next: nxt, fromTop: false, stepX: stepX)
+        // 末段页脚/顶栏同下标易被整段判成粘性，内容带过窄会直接拒帧
+        let stickyCap = max(16, h / 5)
+        stickyTop = min(stickyTop, stickyCap)
+        stickyBot = min(stickyBot, stickyCap)
+
         let lo = stickyTop
         let hi = h - stickyBot
         let span = hi - lo
@@ -237,7 +243,6 @@ public enum ScrollStitcher {
         let maxAdv = max(minAdv, span - max(16, span / 8))
         guard minAdv <= maxAdv else { return nil }
 
-        // iShot：特征行位移为主；否则最大高置信重叠；都失败则拒接（不用默认 10 硬凑）
         if let finger = advanceByFingerprint(
             prev: prev, next: nxt, lo: lo, hi: hi,
             minAdv: minAdv, maxAdv: maxAdv, stepX: stepX
@@ -260,7 +265,45 @@ public enum ScrollStitcher {
             )
         }
 
-        return nil
+        // iShot 指纹失败仍用 w26=10 继续；这里只在「小步进且重叠 MAD 合格」时软回退
+        return advanceBySoftSmallStep(
+            prev: prev, next: nxt, lo: lo, hi: hi,
+            minAdv: minAdv, maxAdv: maxAdv, stepX: stepX
+        )
+    }
+
+    /// 页尾小滚：仅在 minAdv…min(48,maxAdv) 内找 MAD 足够好的步进（默认中心 10）。
+    private static func advanceBySoftSmallStep(
+        prev: GrayImage,
+        next: GrayImage,
+        lo: Int,
+        hi: Int,
+        minAdv: Int,
+        maxAdv: Int,
+        stepX: Int
+    ) -> Int? {
+        let span = hi - lo
+        let hiA = min(maxAdv, max(minAdv, 48))
+        guard minAdv <= hiA else { return nil }
+        var bestA: Int?
+        var bestMAD = Double.infinity
+        for advance in minAdv...hiA {
+            let overlap = span - advance
+            guard overlap >= 12 else { continue }
+            let mad = overlapBandMAD(
+                prev: prev, next: next,
+                prevStart: lo + advance, nextStart: lo,
+                length: overlap, stepX: stepX
+            )
+            if mad < bestMAD - 0.05
+                || (abs(mad - bestMAD) <= 0.05 && (bestA == nil || advance < bestA!)) {
+                bestMAD = mad
+                bestA = advance
+            }
+        }
+        // 真到底、几乎无推进时 MAD 会很差或最优在噪声里——拒绝以免空转叠字
+        guard let advance = bestA, bestMAD < 18 else { return nil }
+        return advance
     }
 
     /// 最大重叠（最小 advance）且 sameArr 行命中率 ≥ 0.88——偏向缝紧，防空洞。
