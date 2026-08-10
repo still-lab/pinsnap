@@ -2,10 +2,9 @@ import CoreGraphics
 import Foundation
 import Vision
 
-/// v1.3 长截图垂直拼接。
-/// 实时：滚轮触发采帧 + `measureAdvance` 条带测偏移 + `appendByAdvance`。
+/// v1.3 长截图垂直拼接（对齐 iShot：全宽 BT.601 + SAD 重叠搜索）。
 public enum ScrollStitcher {
-    public static let maxOutputHeight = 32_768
+    public static let maxOutputHeight = 65_536
     public static let maxFrames = 240
     public static let minAdvancePixels = 8
     public static let defaultOverlapHint = 80
@@ -29,6 +28,114 @@ public enum ScrollStitcher {
             self.driftX = driftX
             self.score = score
         }
+    }
+
+    /// 静止条带区域（sticky header / footer），用于输出层去重。
+    public struct StickyRegions: Sendable {
+        public let top: Int
+        public let bottom: Int
+
+        public init(top: Int = 0, bottom: Int = 0) {
+            self.top = top
+            self.bottom = bottom
+        }
+
+        public var hasSticky: Bool { top > 0 || bottom > 0 }
+    }
+
+    // MARK: - Gray image cache
+
+    /// 缓存条目：持有 CGImage 强引用，防止对象释放后地址被新 CGImage 复用导致缓存命中错误。
+    private final class GrayCacheEntry {
+        let image: CGImage
+        let gray: GrayImage
+        init(image: CGImage, gray: GrayImage) {
+            self.image = image
+            self.gray = gray
+        }
+    }
+
+    private static let grayCacheLock = NSLock()
+    private static var grayCache: [(key: Int, entry: GrayCacheEntry)] = []
+    private static let grayCacheMaxSize = 12
+
+    /// 带缓存的灰度转换。帧间匹配频繁复用同一 CGImage，缓存可避免每帧重复 RGBA→灰度。
+    /// entry 持有 CGImage 强引用 → 对象不会释放 → 指针地址不会被复用 → 缓存键可靠。
+    private static func cachedGrayTopLeft(_ image: CGImage) -> GrayImage? {
+        let key = Int(bitPattern: Unmanaged.passUnretained(image).toOpaque())
+        grayCacheLock.lock()
+        defer { grayCacheLock.unlock() }
+
+        if let idx = grayCache.firstIndex(where: { $0.key == key }) {
+            let entry = grayCache.remove(at: idx)
+            grayCache.append(entry) // MRU → tail
+            return entry.entry.gray
+        }
+
+        guard let gray = grayTopLeft(image) else { return nil }
+        let entry = GrayCacheEntry(image: image, gray: gray)
+        grayCache.append((key: key, entry: entry))
+        while grayCache.count > grayCacheMaxSize {
+            grayCache.removeFirst()
+        }
+        return gray
+    }
+
+    /// 清空灰度缓存（会话结束时调用，释放内存）。
+    public static func clearGrayCache() {
+        grayCacheLock.lock()
+        grayCache.removeAll()
+        grayCacheLock.unlock()
+    }
+
+    // MARK: - Sticky detection
+
+    /// 检测两帧间静止的顶/底条带（sticky header / footer）。
+    /// 复用 edgeChromeMask 逻辑；返回 top/bottom 像素高度。
+    public static func detectSticky(previous: CGImage, next: CGImage) -> StickyRegions {
+        guard let prev = cachedGrayTopLeft(previous),
+              let nxt = cachedGrayTopLeft(next),
+              prev.width == nxt.width,
+              prev.height == nxt.height,
+              prev.height > 48
+        else { return StickyRegions() }
+
+        let mask = edgeChromeMask(prev: prev, next: nxt)
+        let h = prev.height
+        let edge = max(16, h / 3)
+
+        var topH = 0
+        while topH < edge, mask[topH] {
+            topH += 1
+        }
+
+        var bottomH = 0
+        var y = h - 1
+        while y >= h - edge, y >= 0, mask[y] {
+            bottomH += 1
+            y -= 1
+        }
+
+        return StickyRegions(top: topH, bottom: bottomH)
+    }
+
+    /// 从帧中裁出新内容条带（排除 sticky 顶/底区域）。
+    /// `advance` = 新内容像素数；条带高度 = min(advance, contentHeight)。
+    /// CGImage y=0 top；新内容在内容区底部（即 stickyBottom 上方）。
+    public static func contentStrip(
+        frame: CGImage,
+        advance: Int,
+        stickyTop: Int = 0,
+        stickyBottom: Int = 0
+    ) -> CGImage? {
+        let contentH = frame.height - stickyTop - stickyBottom
+        guard contentH > 0, advance > 0 else { return nil }
+        let added = min(advance, contentH)
+        let srcY = frame.height - stickyBottom - added
+        guard srcY >= stickyTop else { return nil }
+        return frame.cropping(
+            to: CGRect(x: 0, y: srcY, width: frame.width, height: added).integral
+        )
     }
 
     // MARK: - Public API
@@ -92,9 +199,8 @@ public enum ScrollStitcher {
         return ctx.makeImage()
     }
 
-    /// 实测两帧内容上移了多少像素（灰度 row0=顶）。
-    /// 双条带共识 + 次优分差。`hint` 保留兼容，**不用作上限**
-    /// （快滑时滚轮 pending 常远小于真推进，压低会产生叠字）。
+    /// iShot 式推进量：全宽 BT.601 灰度，重叠区逐像素 SAD 均值最小者为 advance。
+    /// `hint` 保留 API，不用作搜索上限。
     public static func measureAdvance(
         previous: CGImage,
         next: CGImage,
@@ -104,8 +210,10 @@ public enum ScrollStitcher {
               previous.height == next.height,
               previous.height > 48
         else { return nil }
+        _ = hint
 
-        let maxW = 220
+        // 过宽时等比缩宽（保持高度比），加速全宽扫描；advance 再按比例还原
+        let maxW = 360
         let workPrev: CGImage
         let workNext: CGImage
         let scale: CGFloat
@@ -124,93 +232,59 @@ public enum ScrollStitcher {
 
         guard let prev = grayTopLeft(workPrev),
               let nxt = grayTopLeft(workNext),
+              prev.width == nxt.width,
               prev.height == nxt.height
         else { return nil }
 
         let h = prev.height
-        let probeH = min(36, max(18, h / 10))
-        let probeY1 = h - probeH - max(6, h / 40)
-        let probeY2 = probeY1 - probeH - max(4, h / 50)
-        guard probeY1 > 8 else { return nil }
+        let w = prev.width
+        let minAdv = max(minAdvancePixels, h / 100)
+        // 至少保留约 25% 重叠，对应 iShot 类「大重叠带」拼接
+        let minOverlap = max(32, h / 4)
+        let maxAdv = h - minOverlap
+        guard minAdv <= maxAdv else { return nil }
 
-        let minAdv = max(2, h / 80)
-        // 允许接近 60% 的单步（快滑帧间常超过半高的一半）；仍须留给条带可匹配的重叠
-        let maxAdv = min(probeY1 - 2, (h * 3) / 5)
-        let lo = minAdv
-        let hi = maxAdv
-        guard lo <= hi else { return nil }
-        // hint 仅保留 API；快滑时 pending 常远小于真推进，绝不用作上限
-        _ = hint
+        // 横向可隔点采样；纵向全覆盖重叠带（对齐「全宽」精神，控制耗时）
+        let stepX = max(1, w / 180)
 
-        let stepX = max(1, prev.width / 72)
         var bestAdv = 0
-        var bestMAD = Double.infinity
-        var secondMAD = Double.infinity
+        var bestScore = Double.infinity
+        var secondScore = Double.infinity
 
-        for advance in lo...hi {
-            let mad1 = probeMAD(
-                prev: prev, next: nxt,
-                probeY: probeY1, probeH: probeH,
-                advance: advance, stepX: stepX
-            )
-            guard mad1.isFinite, mad1 <= 22 else { continue }
-            let mad: Double
-            if probeY2 > advance {
-                let mad2 = probeMAD(
-                    prev: prev, next: nxt,
-                    probeY: probeY2, probeH: probeH,
-                    advance: advance, stepX: stepX
-                )
-                // 大步进时第二带可能出界；能算则要求共识，否则单带也可
-                if mad2.isFinite {
-                    if mad2 > 22 { continue }
-                    mad = (mad1 + mad2) * 0.5
-                } else {
-                    mad = mad1
+        for advance in minAdv...maxAdv {
+            let overlap = h - advance
+            var sad: Int64 = 0
+            var count = 0
+            var y = 0
+            while y < overlap {
+                let py = advance + y
+                var x = 0
+                while x < w {
+                    sad += Int64(abs(Int(prev.pixel(x, py)) - Int(nxt.pixel(x, y))))
+                    count += 1
+                    x += stepX
                 }
-            } else {
-                mad = mad1
+                y += 1
             }
-            if mad < bestMAD {
-                secondMAD = bestMAD
-                bestMAD = mad
+            guard count > 0 else { continue }
+            let score = Double(sad) / Double(count)
+            if score < bestScore {
+                secondScore = bestScore
+                bestScore = score
                 bestAdv = advance
-            } else if mad < secondMAD {
-                secondMAD = mad
+            } else if score < secondScore {
+                secondScore = score
             }
         }
 
-        guard bestMAD < 18, bestAdv >= minAdv else { return nil }
-        if secondMAD.isFinite, (secondMAD - bestMAD) < 1.2, bestMAD > 6 {
+        // 匹配过差或与次优分不清则拒接（防重复纹理假匹配）
+        guard bestAdv >= minAdv, bestScore < 28 else { return nil }
+        if secondScore.isFinite, (secondScore - bestScore) < 0.8, bestScore > 8 {
             return nil
         }
 
-        // 近旁略偏保守，但不超过 4px，避免把正确大步进压成叠字
-        var chosen = bestAdv
-        let refineLo = max(minAdv, bestAdv - 4)
-        for advance in refineLo..<bestAdv {
-            let mad1 = probeMAD(
-                prev: prev, next: nxt,
-                probeY: probeY1, probeH: probeH,
-                advance: advance, stepX: stepX
-            )
-            guard mad1.isFinite else { continue }
-            var mad = mad1
-            if probeY2 > advance {
-                let mad2 = probeMAD(
-                    prev: prev, next: nxt,
-                    probeY: probeY2, probeH: probeH,
-                    advance: advance, stepX: stepX
-                )
-                if mad2.isFinite { mad = (mad1 + mad2) * 0.5 }
-            }
-            if mad <= bestMAD + 0.8 {
-                chosen = advance
-            }
-        }
-
-        let full = max(minAdvancePixels, Int((CGFloat(chosen) * scale).rounded()))
-        return min(full, previous.height * 3 / 5)
+        let full = max(minAdvancePixels, Int((CGFloat(bestAdv) * scale).rounded()))
+        return min(full, previous.height - max(32, previous.height / 4))
     }
 
     public struct ChainAppendResult: Sendable {
@@ -350,7 +424,7 @@ public enum ScrollStitcher {
         return canvasBottomMatches(canvas, strip: strip)
     }
 
-    private static func fitted(_ image: CGImage, toMatch ref: CGImage) -> CGImage? {
+    static func fitted(_ image: CGImage, toMatch ref: CGImage) -> CGImage? {
         if image.width == ref.width, image.height == ref.height { return image }
         guard let scaled = rescaleImage(image, toWidth: ref.width),
               scaled.height == ref.height
@@ -385,21 +459,23 @@ public enum ScrollStitcher {
 
     /// 按实测推进拼接：从下一帧底部取 `advance` 像素接到画布下。
     /// 若条带已与画布底部相同（滚轮回摆/重复帧），拒绝拼接以防重叠。
+    /// `stickyBottom`：若有 sticky 页脚，从页脚上方取内容条带（输出层去重）。
     public static func appendByAdvance(
         canvas: CGImage,
         nextFrame: CGImage,
-        advance advancePixels: Int
+        advance advancePixels: Int,
+        stickyBottom: Int = 0
     ) -> CGImage? {
         guard canvas.width == nextFrame.width, advancePixels > 0 else { return nil }
-        let advance = min(advancePixels, nextFrame.height - 1)
+        let advance = min(advancePixels, nextFrame.height - stickyBottom - 1)
         guard advance > 0 else { return nil }
 
         let newHeight = min(maxOutputHeight, canvas.height + advance)
         let added = newHeight - canvas.height
         guard added > 0 else { return nil }
 
-        // CGImage.cropping：y=0 为顶；新内容在底部 → 从 height-added 裁
-        let srcY = nextFrame.height - added
+        // CGImage.cropping：y=0 为顶；新内容在 stickyBottom 上方 → 从 height-stickyBottom-added 裁
+        let srcY = nextFrame.height - stickyBottom - added
         guard srcY >= 0,
               let strip = nextFrame.cropping(
                 to: CGRect(x: 0, y: srcY, width: nextFrame.width, height: added).integral
@@ -440,6 +516,13 @@ public enum ScrollStitcher {
             return -up
         }
         return nil
+    }
+
+    /// 帧质量门控：滤掉静止帧，以及 `measureAdvance` MAD/分差过差的动画中间态。
+    /// 过关的帧才优先送入实时 Session；未过关但 visually 不同的可进桥接缓冲。
+    public static func passesScrollFrameGate(previous: CGImage, next: CGImage) -> Bool {
+        guard looksDifferent(previous, next, threshold: 2.5) else { return false }
+        return signedScrollDelta(previous: previous, next: next) != nil
     }
 
     /// 画布底部是否已与待接条带相同（防来回滚重叠）。
@@ -564,7 +647,7 @@ public enum ScrollStitcher {
     }
 
     public static func looksDifferent(_ a: CGImage, _ b: CGImage, threshold: Double = 12) -> Bool {
-        guard let ga = grayTopLeft(a), let gb = grayTopLeft(b),
+        guard let ga = cachedGrayTopLeft(a), let gb = cachedGrayTopLeft(b),
               ga.width == gb.width, ga.height == gb.height
         else { return true }
         let step = max(1, ga.width / 48)
@@ -714,8 +797,8 @@ public enum ScrollStitcher {
             )
         }
 
-        if let fullPrev = grayTopLeft(previous),
-           let fullNext = grayTopLeft(next),
+        if let fullPrev = cachedGrayTopLeft(previous),
+           let fullNext = cachedGrayTopLeft(next),
            fullPrev.width == fullNext.width,
            fullPrev.height == fullNext.height
         {
@@ -1051,10 +1134,11 @@ public enum ScrollStitcher {
         var pixels = [UInt8](repeating: 0, count: w * h)
         for i in 0..<(w * h) {
             let o = i * 4
-            let r = Int(rgba[o])
-            let g = Int(rgba[o + 1])
-            let b = Int(rgba[o + 2])
-            pixels[i] = UInt8((r * 30 + g * 59 + b * 11) / 100)
+            let r = Double(rgba[o])
+            let g = Double(rgba[o + 1])
+            let b = Double(rgba[o + 2])
+            // iShot literal：BT.601 0.30 / 0.59 / 0.11
+            pixels[i] = UInt8(max(0, min(255, r * 0.30 + g * 0.59 + b * 0.11)))
         }
         return GrayImage(width: w, height: h, pixels: pixels)
     }

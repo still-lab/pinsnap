@@ -43,15 +43,22 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private var hoverWindow: WindowHit?
     private var toolbar: CaptureToolbar?
     fileprivate var isScrollCapturing = false
-    private var scrollFrames: [CGImage] = []
     private var scrollPreviewCanvas: CGImage?
-    /// 尚未拼上的桥接帧（快滑中间态），供 `chainAppend` 追赶。
+    /// 尚未拼上的桥接帧（快滑中间态），供 Session 追赶。
     private var scrollBridgeFrames: [CGImage] = []
     private var scrollTask: Task<Void, Never>?
-    /// 滚轮待拼接像素（全局 monitor 累加，采帧后按量消费）。
-    private var scrollPendingPixels: CGFloat = 0
     private var scrollWheelMonitor: Any?
+    /// 长截穿透时本地 monitor 常收不到，用全局 Esc/右键结束并导出。
+    private var scrollGlobalKeyMonitor: Any?
+    private var scrollGlobalRightClickMonitor: Any?
+    /// 空闲 60ms → 截末帧并自动导出（对齐 iShot `scrollFinished`）。
+    private var scrollIdleTimer: Timer?
+    private var scrollCaptureBusy = false
+    private var scrollNeedsRecapture = false
     private var scrollSidePreview: ScrollCapturePreview?
+    private var scrollDoneBar: ScrollCaptureDoneBar?
+    /// 有状态拼接会话（O(1) append + 侧栏跟长）。
+    private var scrollStitchSession: ScrollStitchSession?
     /// 长截完成后的浮动预览（全分辨率另存）。
     private var isFloatingResult = false
     private var floatingFullImage: CGImage?
@@ -162,6 +169,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         toolbar?.close()
         toolbar = nil
         dismissScrollSidePreview()
+        dismissScrollDoneBar()
         panels.forEach { $0.orderOut(nil); $0.close() }
         panels.removeAll()
         selection = nil
@@ -292,6 +300,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         }
         rightClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] _ in
             guard let self, !self.isEditingText else { return nil }
+            if self.isScrollCapturing {
+                self.stopScrollCapture(commit: self.scrollStitchSession != nil)
+                return nil
+            }
             self.cancel()
             return nil
         }
@@ -326,8 +338,12 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
 
     private func handleEscape() {
         if isScrollCapturing {
-            stopScrollCapture(commit: false)
-            cancel()
+            // 对齐 iShot：Esc 导出已有画布；尚无帧则整段取消
+            let hadSession = scrollStitchSession != nil
+            stopScrollCapture(commit: hadSession)
+            if !hadSession {
+                cancel()
+            }
             return
         }
         // 长截浮动结果：Esc 一律关闭，不先清工具
@@ -955,7 +971,14 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
     func toolbarSave() { commitSave() }
     func toolbarPin() { commitPin() }
-    func toolbarClose() { cancel() }
+    func toolbarClose() {
+        if isScrollCapturing {
+            stopScrollCapture(commit: false)
+            cancel()
+            return
+        }
+        cancel()
+    }
     func toolbarScrollCapture() {
         if isFloatingResult { return }
         // 长截中再点一次 = 完成
@@ -967,6 +990,20 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     // MARK: - Scroll capture (long screenshot)
+    // 采帧：deltaY<0 立刻截；≥0 忽略；停滚可补一帧。
+    // 结束：仅完成 / 取消 / Esc / 右键 / Enter（不停滚自动退出）。
+
+    private static let scrollBridgeMaxFrames = 12
+    private static let scrollFirstFrameDelayNs: UInt64 = 100_000_000
+    /// 停滚后补截稳定帧，绝不因此结束会话。
+    private static let scrollSettleInterval: TimeInterval = 0.2
+    private static let scrollDeltaNoise: CGFloat = 0.5
+
+    private enum ScrollCaptureTrigger {
+        case firstFrame
+        case wheel
+        case settle
+    }
 
     private func startScrollCapture() {
         guard !isScrollCapturing,
@@ -985,44 +1022,51 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         activeTool = nil
         draftShape = nil
 
-        scrollFrames = []
         scrollPreviewCanvas = nil
         scrollBridgeFrames = []
-        scrollPendingPixels = 0
+        scrollStitchSession = nil
+        scrollCaptureBusy = false
+        scrollNeedsRecapture = false
+        invalidateScrollIdleTimer()
         removeScrollWheelMonitor()
+        removeScrollGlobalEndMonitors()
 
         isScrollCapturing = true
         onScrollCaptureActiveChange?(true)
 
-        // 整窗穿透：灰罩下与选区内都能滚下层；采帧仍只取选区
         for panel in panels {
             panel.ignoresMouseEvents = true
         }
         syncLayers()
+        // 长截中隐藏标注工具栏，只留完成/取消
+        toolbar?.orderOut(nil)
         installScrollWheelMonitor()
-        toolbar?.orderFrontRegardless()
+        installScrollGlobalEndMonitors()
         presentScrollSidePreview(beside: selection)
+        presentScrollDoneBar(beside: selection)
 
         PinSnapLog.capture.info(
-            "scroll start rect=\(Int(selection.logicalRect.width))x\(Int(selection.logicalRect.height)) passthrough=full capture=selection"
+            "scroll start rect=\(Int(selection.logicalRect.width))x\(Int(selection.logicalRect.height)) ishot-pipeline"
         )
 
         scrollTask?.cancel()
         scrollTask = Task { [weak self] in
-            await self?.runScrollCaptureLoop()
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: Self.scrollFirstFrameDelayNs)
+            guard !Task.isCancelled, self.isScrollCapturing else { return }
+            await self.captureScrollFrame(trigger: .firstFrame)
         }
     }
 
     private func installScrollWheelMonitor() {
         removeScrollWheelMonitor()
-        // 有「输入监控」权限时加速触发；无权限则靠下方轮询采帧
         scrollWheelMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             Task { @MainActor in
                 self?.handleScrollWheelForCapture(event)
             }
         }
         if scrollWheelMonitor == nil {
-            PinSnapLog.capture.error("scroll wheel global monitor unavailable; using poll capture")
+            PinSnapLog.capture.error("scroll wheel global monitor unavailable")
         }
     }
 
@@ -1033,199 +1077,159 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         }
     }
 
-    private func handleScrollWheelForCapture(_ event: NSEvent) {
-        guard isScrollCapturing, let selection else { return }
-        let points: CGFloat
-        if event.hasPreciseScrollingDeltas {
-            points = event.scrollingDeltaY
-        } else {
-            points = event.deltaY * 16
+    private func installScrollGlobalEndMonitors() {
+        removeScrollGlobalEndMonitors()
+        scrollGlobalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            Task { @MainActor in
+                guard let self, self.isScrollCapturing else { return }
+                if event.keyCode == 53 || event.keyCode == 36 || event.keyCode == 76 {
+                    self.stopScrollCapture(commit: self.scrollStitchSession != nil)
+                }
+            }
         }
-        let revealBottom = event.isDirectionInvertedFromDevice ? -points : points
-        guard abs(revealBottom) > 0.05 else { return }
-        let scale = geometry.screen(id: selection.screenID)?.scale
-            ?? NSScreen.main?.backingScaleFactor
-            ?? 2
-        scrollPendingPixels = max(0, scrollPendingPixels + revealBottom * scale)
+        scrollGlobalRightClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .rightMouseDown) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.isScrollCapturing else { return }
+                self.stopScrollCapture(commit: self.scrollStitchSession != nil)
+            }
+        }
     }
 
-    private func runScrollCaptureLoop() async {
-        let capture = captureRegion
-        guard let capture else { return }
-        try? await Task.sleep(nanoseconds: 180_000_000)
-        var failStreak = 0
-        var stitchMissStreak = 0
+    private func removeScrollGlobalEndMonitors() {
+        if let scrollGlobalKeyMonitor {
+            NSEvent.removeMonitor(scrollGlobalKeyMonitor)
+            self.scrollGlobalKeyMonitor = nil
+        }
+        if let scrollGlobalRightClickMonitor {
+            NSEvent.removeMonitor(scrollGlobalRightClickMonitor)
+            self.scrollGlobalRightClickMonitor = nil
+        }
+    }
 
-        while !Task.isCancelled {
-            let alive = await MainActor.run { self.isScrollCapturing }
-            guard alive else { break }
-            let selection = await MainActor.run { self.selection }
-            guard let selection else { break }
+    private func invalidateScrollIdleTimer() {
+        scrollIdleTimer?.invalidate()
+        scrollIdleTimer = nil
+    }
 
-            let frameCount = await MainActor.run { self.scrollFrames.count }
-            if frameCount >= ScrollStitcher.maxFrames {
-                await MainActor.run { self.stopScrollCapture(commit: true) }
-                return
+    /// 停滚后补一帧；不结束。
+    private func resetScrollIdleTimer() {
+        invalidateScrollIdleTimer()
+        let timer = Timer(timeInterval: Self.scrollSettleInterval, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                await self?.handleScrollSettleTimeout()
             }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        scrollIdleTimer = timer
+    }
 
-            // 首帧：直接采
-            let needsSeed = await MainActor.run { self.scrollFrames.isEmpty }
-            if needsSeed {
-                let exclude = await MainActor.run { self.scrollExcludeWindowIDs() }
-                do {
-                    let image = try await capture(selection, exclude)
-                    failStreak = 0
-                    await MainActor.run {
-                        guard self.isScrollCapturing else { return }
-                        self.scrollFrames.append(image)
-                        self.scrollPreviewCanvas = image
-                        self.scrollBridgeFrames = []
-                        self.scrollPendingPixels = 0
-                        self.syncLayers()
-                        self.refreshScrollSidePreviewAvoidance()
-                        self.scrollSidePreview?.update(preview: image)
-                        PinSnapLog.capture.info("scroll seed \(image.width)x\(image.height)")
-                    }
-                } catch {
-                    failStreak += 1
-                    PinSnapLog.capture.error("scroll capture frame: \(error.localizedDescription)")
-                    if failStreak >= 8 {
-                        await MainActor.run { self.stopScrollCapture(commit: false) }
-                        return
-                    }
-                }
-                try? await Task.sleep(nanoseconds: 50_000_000)
-                continue
+    private func handleScrollSettleTimeout() async {
+        guard isScrollCapturing else { return }
+        await waitUntilCaptureIdle()
+        guard isScrollCapturing else { return }
+        await captureScrollFrame(trigger: .settle)
+        // 明确：此处绝不 stopScrollCapture
+    }
+
+    private func waitUntilCaptureIdle() async {
+        while isScrollCapturing, scrollCaptureBusy {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    private func handleScrollWheelForCapture(_ event: NSEvent) {
+        guard isScrollCapturing else { return }
+        let deltaY = event.scrollingDeltaY
+        guard abs(deltaY) > Self.scrollDeltaNoise else { return }
+        guard deltaY < 0 else { return }
+
+        Task { @MainActor in
+            await self.waitUntilCaptureIdle()
+            guard self.isScrollCapturing else { return }
+            await self.captureScrollFrame(trigger: .wheel)
+            guard self.isScrollCapturing else { return }
+            self.resetScrollIdleTimer()
+        }
+    }
+
+    private func captureScrollFrame(trigger: ScrollCaptureTrigger) async {
+        guard isScrollCapturing else { return }
+        await waitUntilCaptureIdle()
+        guard isScrollCapturing, !scrollCaptureBusy else { return }
+
+        scrollCaptureBusy = true
+        defer { scrollCaptureBusy = false }
+
+        guard let selection, let capture = captureRegion else { return }
+
+        if let session = scrollStitchSession,
+           session.acceptedCount >= ScrollStitcher.maxFrames
+            || session.canvas.height >= StitchCanvas.maxOutputHeight {
+            stopScrollCapture(commit: true)
+            return
+        }
+
+        let exclude = scrollExcludeWindowIDs()
+        do {
+            let image = try await capture(selection, exclude)
+            if scrollStitchSession == nil {
+                let session = ScrollStitchSession(firstFrame: image, detectSticky: false)
+                scrollStitchSession = session
+                scrollPreviewCanvas = session.canvas.makePreview()
+                scrollSidePreview?.update(preview: scrollPreviewCanvas)
+                syncLayers()
+                PinSnapLog.capture.info("scroll seed \(image.width)x\(image.height)")
+            } else {
+                await ingestScrollFrame(image)
             }
+        } catch {
+            PinSnapLog.capture.error("scroll capture frame: \(error.localizedDescription)")
+        }
+    }
 
-            let pending = await MainActor.run { self.scrollPendingPixels }
-            let bridgeCount = await MainActor.run { self.scrollBridgeFrames.count }
-            let trigger = CGFloat(max(4, ScrollStitcher.minAdvancePixels / 2))
-            // 轮询采帧：不依赖滚轮权限；有 pending/桥帧时更勤
-            let pollNs: UInt64 = (pending >= trigger || bridgeCount > 0) ? 24_000_000 : 70_000_000
+    /// 门控后送入 Session。
+    private func ingestScrollFrame(_ image: CGImage) async {
+        guard let session = scrollStitchSession else { return }
+        let ref = session.lastFrame
 
-            let hint = max(Int(pending.rounded()), 0)
-            let exclude = await MainActor.run { self.scrollExcludeWindowIDs() }
-            do {
-                // 始终采一帧，用图像差分发现滚动（全局滚轮监听可能无权限）
-                let image = try await capture(selection, exclude)
-                failStreak = 0
+        // iShot：相同帧不保留
+        if !ScrollStitcher.looksDifferent(ref, image, threshold: 2.5) {
+            return
+        }
 
-                let snapshot: (last: CGImage?, canvas: CGImage?, bridge: [CGImage]) = await MainActor.run {
-                    (self.scrollFrames.last, self.scrollPreviewCanvas, self.scrollBridgeFrames)
-                }
-                guard let last = snapshot.last, let canvas = snapshot.canvas else {
-                    try? await Task.sleep(nanoseconds: pollNs)
-                    continue
-                }
-
-                let stitched = await Task.detached(priority: .userInitiated) { () -> (frames: [CGImage], canvas: CGImage, last: CGImage, advance: Int, remainder: [CGImage], didChange: Bool)? in
-                    var incoming = snapshot.bridge
-                    let frame: CGImage
-                    if last.width == image.width, last.height == image.height {
-                        frame = image
-                    } else if let scaled = ScrollStitcher.rescaleImage(image, toWidth: last.width),
-                              scaled.height == last.height {
-                        frame = scaled
-                    } else {
-                        return nil
-                    }
-                    let differsFromLast = ScrollStitcher.looksDifferent(last, frame, threshold: 2.0)
-                    let differsFromBridge = incoming.last.map {
-                        ScrollStitcher.looksDifferent($0, frame, threshold: 2.0)
-                    } ?? true
-                    if differsFromLast || differsFromBridge {
-                        incoming.append(frame)
-                    }
-                    if incoming.count > 16 {
-                        incoming = Array(incoming.suffix(16))
-                    }
-                    guard !incoming.isEmpty else { return nil }
-
-                    guard let chained = ScrollStitcher.chainAppend(
-                        canvas: canvas,
-                        lastFrame: last,
-                        incoming: incoming
-                    ) else { return nil }
-
-                    return (
-                        chained.acceptedFrames,
-                        chained.canvas,
-                        chained.lastFrame,
-                        chained.totalAdvance,
-                        chained.remainder,
-                        chained.didChange
-                    )
-                }.value
-
-                guard let stitched else {
-                    try? await Task.sleep(nanoseconds: pollNs)
-                    continue
-                }
-
-                if stitched.didChange {
-                    stitchMissStreak = 0
-                    let hitLimit = await MainActor.run { () -> Bool in
-                        guard self.isScrollCapturing else { return true }
-                        if stitched.advance > 0 {
-                            self.scrollPendingPixels = max(
-                                0,
-                                self.scrollPendingPixels - CGFloat(stitched.advance)
-                            )
-                        }
-                        if !stitched.frames.isEmpty {
-                            self.scrollFrames.append(contentsOf: stitched.frames)
-                        } else if !self.scrollFrames.isEmpty {
-                            self.scrollFrames[self.scrollFrames.count - 1] = stitched.last
-                        }
-                        self.scrollPreviewCanvas = stitched.canvas
-                        self.scrollBridgeFrames = stitched.remainder
-                        self.syncLayers()
-                        self.refreshScrollSidePreviewAvoidance()
-                        self.scrollSidePreview?.update(preview: stitched.canvas)
-                        PinSnapLog.capture.info(
-                            "scroll advance=\(stitched.advance) hint=\(hint) frames=\(self.scrollFrames.count) canvasH=\(stitched.canvas.height) bridge=\(stitched.remainder.count)"
-                        )
-                        // 仅画布顶高才自动收束；帧数接近上限时继续拼，由高度兜底
-                        if stitched.canvas.height >= ScrollStitcher.maxOutputHeight {
-                            return true
-                        }
-                        if self.scrollFrames.count >= ScrollStitcher.maxFrames {
-                            PinSnapLog.capture.info("scroll hit maxFrames=\(ScrollStitcher.maxFrames), auto commit")
-                            return true
-                        }
-                        return false
-                    }
-                    if hitLimit {
-                        await MainActor.run { self.stopScrollCapture(commit: true) }
-                        return
-                    }
-                } else {
-                    stitchMissStreak += 1
-                    await MainActor.run {
-                        self.scrollBridgeFrames = stitched.remainder
-                    }
-                    if stitchMissStreak >= 8 {
-                        await MainActor.run {
-                            self.scrollPendingPixels = max(0, self.scrollPendingPixels * 0.5)
-                            if !self.scrollBridgeFrames.isEmpty {
-                                self.scrollBridgeFrames.removeFirst()
-                            }
-                        }
-                        stitchMissStreak = 0
-                    }
-                }
-                try? await Task.sleep(nanoseconds: pollNs)
-                continue
-            } catch {
-                failStreak += 1
-                PinSnapLog.capture.error("scroll capture frame: \(error.localizedDescription)")
-                if failStreak >= 8 {
-                    await MainActor.run { self.stopScrollCapture(commit: self.scrollFrames.count > 0) }
-                    return
-                }
-                try? await Task.sleep(nanoseconds: pollNs)
+        let gated = ScrollStitcher.passesScrollFrameGate(previous: ref, next: image)
+        var incoming = scrollBridgeFrames
+        if gated {
+            incoming.append(image)
+        } else {
+            scrollBridgeFrames.append(image)
+            if scrollBridgeFrames.count > Self.scrollBridgeMaxFrames {
+                scrollBridgeFrames.removeFirst(scrollBridgeFrames.count - Self.scrollBridgeMaxFrames)
             }
+            incoming = scrollBridgeFrames
+            PinSnapLog.capture.info("scroll gate reject bridge=\(self.scrollBridgeFrames.count)")
+        }
+
+        guard !incoming.isEmpty else { return }
+
+        let result = await Task.detached(priority: .userInitiated) {
+            session.append(incoming: incoming)
+        }.value
+
+        scrollBridgeFrames = Array(result.remainder.suffix(Self.scrollBridgeMaxFrames))
+
+        if result.didChange {
+            scrollPreviewCanvas = result.preview
+            scrollSidePreview?.update(preview: result.preview)
+            syncLayers()
+            refreshScrollSidePreviewAvoidance()
+            PinSnapLog.capture.info(
+                "scroll advance=\(result.totalAdvance) accepted=\(session.acceptedCount) canvasH=\(session.canvas.height) bridge=\(self.scrollBridgeFrames.count)"
+            )
+        }
+
+        if result.hitLimit {
+            stopScrollCapture(commit: true)
         }
     }
 
@@ -1240,6 +1244,9 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         if let preview = scrollSidePreview {
             ids.append(CGWindowID(preview.windowNumber))
         }
+        if let done = scrollDoneBar {
+            ids.append(CGWindowID(done.windowNumber))
+        }
         return ids
     }
 
@@ -1247,23 +1254,35 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         dismissScrollSidePreview()
         let preview = ScrollCapturePreview()
         if let screen = geometry.screen(id: selection.screenID) {
-            // 先确保工具条位置正确，再避开它
-            repositionToolbar()
             preview.place(
                 beside: selection.logicalRect,
                 inScreenBounds: screen.logicalFrame,
-                avoiding: toolbar?.isVisible == true ? toolbar?.frame : nil
+                avoiding: nil
             )
         }
         preview.update(preview: scrollPreviewCanvas)
         scrollSidePreview = preview
-        toolbar?.orderFrontRegardless()
+    }
+
+    private func presentScrollDoneBar(beside selection: CaptureSelection) {
+        dismissScrollDoneBar()
+        let bar = ScrollCaptureDoneBar()
+        bar.onDone = { [weak self] in
+            self?.stopScrollCapture(commit: true)
+        }
+        bar.onCancel = { [weak self] in
+            self?.stopScrollCapture(commit: false)
+            self?.cancel()
+        }
+        if let screen = geometry.screen(id: selection.screenID) {
+            bar.place(near: selection.logicalRect, inScreenBounds: screen.logicalFrame)
+        }
+        scrollDoneBar = bar
     }
 
     private func refreshScrollSidePreviewAvoidance() {
         guard let preview = scrollSidePreview else { return }
-        repositionToolbar()
-        preview.setAvoiding(toolbar?.isVisible == true ? toolbar?.frame : nil)
+        preview.setAvoiding(nil)
     }
 
     private func dismissScrollSidePreview() {
@@ -1272,23 +1291,32 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         scrollSidePreview = nil
     }
 
+    private func dismissScrollDoneBar() {
+        scrollDoneBar?.orderOut(nil)
+        scrollDoneBar?.close()
+        scrollDoneBar = nil
+    }
+
     private func stopScrollCapture(commit: Bool) {
         scrollTask?.cancel()
         scrollTask = nil
+        invalidateScrollIdleTimer()
         removeScrollWheelMonitor()
-        scrollPendingPixels = 0
+        removeScrollGlobalEndMonitors()
         dismissScrollSidePreview()
+        dismissScrollDoneBar()
 
         let wasActive = isScrollCapturing
         if !wasActive {
             return
         }
 
-        let framesToStitch = scrollFrames
-        let preview = scrollPreviewCanvas
-        scrollFrames = []
+        let session = scrollStitchSession
         scrollPreviewCanvas = nil
         scrollBridgeFrames = []
+        scrollStitchSession = nil
+        scrollCaptureBusy = false
+        scrollNeedsRecapture = false
 
         isScrollCapturing = false
         onScrollCaptureActiveChange?(false)
@@ -1303,29 +1331,25 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             toolbar?.close()
             toolbar = nil
 
-            guard !framesToStitch.isEmpty else {
-                PinSnapLog.capture.error("scroll commit with 0 frames")
-                cancel()
-                return
-            }
-            let stitched = preview
-                ?? ScrollStitcher.stitchVertically(framesToStitch)
-                ?? ScrollStitcher.stackImages(framesToStitch)
+            let stitched = session?.makeFullImage()
+            PinSnapLog.capture.info(
+                "scroll done accepted=\(session?.acceptedCount ?? 0) canvasH=\(session?.canvas.height ?? 0) size=\(stitched?.width ?? 0)x\(stitched?.height ?? 0)"
+            )
+
             guard let stitched,
                   let selection,
                   let screen = geometry.screen(id: selection.screenID)
             else {
-                PinSnapLog.capture.error("scroll stitch failed frames=\(framesToStitch.count)")
+                PinSnapLog.capture.error("scroll stitch failed")
+                ScrollStitcher.clearGrayCache()
                 cancel()
                 return
             }
-            PinSnapLog.capture.info(
-                "scroll done frames=\(framesToStitch.count) size=\(stitched.width)x\(stitched.height)"
-            )
             presentStitchedResult(stitched, on: screen, anchor: selection)
             return
         }
 
+        ScrollStitcher.clearGrayCache()
         // 取消长截：回到标注态
         for panel in panels {
             panel.ignoresMouseEvents = false
@@ -1747,7 +1771,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     // MARK: - Toolbar / layers
 
     private func showToolbar() {
-        guard selection != nil else { return }
+        guard selection != nil, !isScrollCapturing else { return }
         if toolbar == nil {
             let bar = CaptureToolbar()
             bar.actionHandler = self
@@ -1798,8 +1822,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     fileprivate func keyDown(_ event: NSEvent) {
         if isScrollCapturing {
             if event.keyCode == 53 {
-                stopScrollCapture(commit: false)
-                cancel()
+                stopScrollCapture(commit: scrollStitchSession != nil)
                 return
             }
             if event.keyCode == 36 || event.keyCode == 76 {

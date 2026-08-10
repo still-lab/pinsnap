@@ -420,6 +420,18 @@ final class ScrollStitchTests: XCTestCase {
         XCTAssertTrue(ScrollStitcher.looksDifferent(a, b))
     }
 
+    func testScrollFrameGateRejectsIdenticalAndAcceptsAdvance() throws {
+        let a = try XCTUnwrap(CGImage.makeSolid(width: 48, height: 200))
+        XCTAssertFalse(ScrollStitcher.passesScrollFrameGate(previous: a, next: a))
+
+        let band = try XCTUnwrap(Self.makeNoise(width: 48, height: 120, seed: 21))
+        let top = try XCTUnwrap(Self.makeNoise(width: 48, height: 80, seed: 22))
+        let bottom = try XCTUnwrap(Self.makeNoise(width: 48, height: 80, seed: 23))
+        let frameA = try XCTUnwrap(Self.stackVertically([top, band]))
+        let frameB = try XCTUnwrap(Self.stackVertically([band, bottom]))
+        XCTAssertTrue(ScrollStitcher.passesScrollFrameGate(previous: frameA, next: frameB))
+    }
+
     func testFilterAdvancesDropsDuplicates() throws {
         let a = try XCTUnwrap(CGImage.makeSolid(width: 24, height: 80))
         XCTAssertEqual(ScrollStitcher.filterAdvances([a, a, a], overlapHint: 30).count, 1)
@@ -665,6 +677,380 @@ private extension CGImage {
         ctx.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
         ctx.fill(CGRect(x: width / 2, y: 0, width: width - width / 2, height: height))
         return ctx.makeImage()
+    }
+}
+
+// MARK: - StitchCanvas Tests
+
+final class StitchCanvasTests: XCTestCase {
+
+    /// appendBottom 逐条追加，height 应等于各条带高度之和。
+    func testAppendBottomGrowsByStripHeight() throws {
+        let canvas = StitchCanvas(width: 32)
+        let s1 = try XCTUnwrap(Self.makeSolid(width: 32, height: 40, r: 200))
+        let s2 = try XCTUnwrap(Self.makeSolid(width: 32, height: 60, r: 100))
+        let s3 = try XCTUnwrap(Self.makeSolid(width: 32, height: 20, r: 50))
+
+        canvas.appendBottom(s1)
+        XCTAssertEqual(canvas.height, 40)
+        XCTAssertEqual(canvas.segmentCount, 1)
+
+        canvas.appendBottom(s2)
+        XCTAssertEqual(canvas.height, 100)
+        XCTAssertEqual(canvas.segmentCount, 2)
+
+        canvas.appendBottom(s3)
+        XCTAssertEqual(canvas.height, 120)
+        XCTAssertEqual(canvas.segmentCount, 3)
+    }
+
+    /// trimBottom 应从尾部逐段裁掉，部分裁切保留段顶。
+    func testTrimBottomShrinksCorrectly() throws {
+        let canvas = StitchCanvas(width: 16)
+        let s1 = try XCTUnwrap(Self.makeSolid(width: 16, height: 40, r: 200))
+        let s2 = try XCTUnwrap(Self.makeSolid(width: 16, height: 60, r: 100))
+        canvas.appendBottom(s1)
+        canvas.appendBottom(s2)
+        XCTAssertEqual(canvas.height, 100)
+
+        // 裁掉整个 s2
+        canvas.trimBottom(60)
+        XCTAssertEqual(canvas.height, 40)
+        XCTAssertEqual(canvas.segmentCount, 1)
+
+        // 裁掉 s1 的一半
+        canvas.trimBottom(20)
+        XCTAssertEqual(canvas.height, 20)
+        XCTAssertEqual(canvas.segmentCount, 1)
+    }
+
+    /// flatten 后的图像：顶部应是第一个 segment，底部应是最后一个 segment。
+    /// CGImage top-left origin → flatten 后顶行 = 第一个 segment 的顶行。
+    func testFlattenPreservesVerticalOrder() throws {
+        let canvas = StitchCanvas(width: 24)
+        let red = try XCTUnwrap(Self.makeSolid(width: 24, height: 30, r: 255, g: 0, b: 0))
+        let blue = try XCTUnwrap(Self.makeSolid(width: 24, height: 30, r: 0, g: 0, b: 255))
+        canvas.appendBottom(red)
+        canvas.appendBottom(blue)
+
+        let flat = try XCTUnwrap(canvas.flatten())
+        XCTAssertEqual(flat.width, 24)
+        XCTAssertEqual(flat.height, 60)
+
+        // 顶行应为红
+        let topPatch = try XCTUnwrap(flat.cropping(to: CGRect(x: 0, y: 0, width: 24, height: 10).integral))
+        XCTAssertTrue(Self.dominantChannel(topPatch, offset: 0) > 200, "top should be red")
+
+        // 底行应为蓝
+        let bottomPatch = try XCTUnwrap(flat.cropping(to: CGRect(x: 0, y: 50, width: 24, height: 10).integral))
+        XCTAssertTrue(Self.dominantChannel(bottomPatch, offset: 2) > 200, "bottom should be blue")
+    }
+
+    /// trimFirstSegmentBottom 裁掉首段底部后，height 减少正确量，后续段 yTop 调整。
+    func testTrimFirstSegmentBottom() throws {
+        let canvas = StitchCanvas(width: 20)
+        let s1 = try XCTUnwrap(Self.makeSolid(width: 20, height: 50, r: 200))
+        let s2 = try XCTUnwrap(Self.makeSolid(width: 20, height: 30, r: 100))
+        canvas.appendBottom(s1)
+        canvas.appendBottom(s2)
+        XCTAssertEqual(canvas.height, 80)
+
+        // 裁掉首段底部 10px
+        canvas.trimFirstSegmentBottom(10)
+        XCTAssertEqual(canvas.height, 70)
+        XCTAssertEqual(canvas.segmentCount, 2)
+
+        // flatten 后验证：高度应为 70
+        let flat = try XCTUnwrap(canvas.flatten())
+        XCTAssertEqual(flat.height, 70)
+    }
+
+    /// makePreview 应返回降采样图像，宽度按比例缩放。
+    func testMakePreviewScalesDown() throws {
+        let canvas = StitchCanvas(width: 40)
+        let s = try XCTUnwrap(Self.makeSolid(width: 40, height: 400, r: 128))
+        canvas.appendBottom(s)
+        let preview = try XCTUnwrap(canvas.makePreview(maxHeight: 100))
+        XCTAssertLessThanOrEqual(preview.height, 100)
+        XCTAssertGreaterThan(preview.height, 0)
+    }
+
+    /// bottomMatches: 画布底部与相同条带应返回 true。
+    func testBottomMatchesIdenticalStrip() throws {
+        let canvas = StitchCanvas(width: 32)
+        let s1 = try XCTUnwrap(Self.makeNoise(width: 32, height: 40, seed: 1))
+        let s2 = try XCTUnwrap(Self.makeNoise(width: 32, height: 30, seed: 2))
+        canvas.appendBottom(s1)
+        canvas.appendBottom(s2)
+        XCTAssertTrue(canvas.bottomMatches(s2), "bottom should match last segment")
+    }
+
+    // MARK: - Helpers
+
+    private static func makeSolid(width: Int, height: Int, r: UInt8, g: UInt8 = 0, b: UInt8 = 0) -> CGImage? {
+        let cs = CGColorSpaceCreateDeviceRGB()
+        var data = [UInt8](repeating: 0, count: width * height * 4)
+        for i in stride(from: 0, to: data.count, by: 4) {
+            data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255
+        }
+        guard let provider = CGDataProvider(data: Data(data) as CFData) else { return nil }
+        return CGImage(
+            width: width, height: height,
+            bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+            space: cs,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        )
+    }
+
+    private static func makeNoise(width: Int, height: Int, seed: UInt64) -> CGImage? {
+        var rng = seed &+ 0x9E3779B97F4A7C15
+        func nextByte() -> UInt8 {
+            rng = rng &* 6364136223846793005 &+ 1
+            return UInt8(truncatingIfNeeded: rng >> 33)
+        }
+        let cs = CGColorSpaceCreateDeviceRGB()
+        var data = [UInt8](repeating: 0, count: width * height * 4)
+        for i in stride(from: 0, to: data.count, by: 4) {
+            let v = nextByte()
+            data[i] = v; data[i + 1] = v; data[i + 2] = v; data[i + 3] = 255
+        }
+        guard let provider = CGDataProvider(data: Data(data) as CFData),
+              let image = CGImage(
+                width: width, height: height,
+                bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                space: cs,
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+              )
+        else { return nil }
+        return image
+    }
+
+    private static func dominantChannel(_ image: CGImage, offset: Int) -> Double {
+        let w = image.width, h = image.height
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return 0 }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var sum = 0.0, n = 0.0
+        var i = offset
+        while i < px.count {
+            sum += Double(px[i]); n += 1; i += 4
+        }
+        return n > 0 ? sum / n : 0
+    }
+}
+
+// MARK: - Sticky Dedup Tests
+
+final class StickyDedupTests: XCTestCase {
+
+    /// 直接测试 detectSticky：两帧底部有相同的静止 footer，应检出 bottom > 0。
+    func testDetectStickyFindsFooter() throws {
+        let w = 48, h = 120, footerH = 10
+        let footer = try XCTUnwrap(Self.makeSolid(width: w, height: footerH, r: 50, g: 50, b: 50))
+        let body1 = try XCTUnwrap(Self.makeNoise(width: w, height: h - footerH, seed: 1))
+        let body2 = try XCTUnwrap(Self.makeNoise(width: w, height: h - footerH, seed: 2))
+        let frame1 = try XCTUnwrap(Self.stackVertically([body1, footer]))
+        let frame2 = try XCTUnwrap(Self.stackVertically([body2, footer]))
+
+        let sticky = ScrollStitcher.detectSticky(previous: frame1, next: frame2)
+        XCTAssertGreaterThan(sticky.bottom, 0, "should detect static footer")
+        XCTAssertLessThanOrEqual(sticky.bottom, footerH + 4, "bottom should be ~footerH (±dilation)")
+    }
+
+    /// 直接测试 detectSticky：两帧顶部有相同的静止 header，应检出 top > 0。
+    func testDetectStickyFindsHeader() throws {
+        let w = 48, h = 120, headerH = 10
+        let header = try XCTUnwrap(Self.makeSolid(width: w, height: headerH, r: 200, g: 100, b: 0))
+        let body1 = try XCTUnwrap(Self.makeNoise(width: w, height: h - headerH, seed: 3))
+        let body2 = try XCTUnwrap(Self.makeNoise(width: w, height: h - headerH, seed: 4))
+        let frame1 = try XCTUnwrap(Self.stackVertically([header, body1]))
+        let frame2 = try XCTUnwrap(Self.stackVertically([header, body2]))
+
+        let sticky = ScrollStitcher.detectSticky(previous: frame1, next: frame2)
+        XCTAssertGreaterThan(sticky.top, 0, "should detect static header")
+    }
+
+    /// 直接测试 contentStrip：给定 stickyBottom，应从 footer 上方裁出内容条带。
+    func testContentStripExcludesStickyBottom() throws {
+        let w = 32, h = 100, footerH = 10
+        let footer = try XCTUnwrap(Self.makeSolid(width: w, height: footerH, r: 50, g: 50, b: 50))
+        let body = try XCTUnwrap(Self.makeNoise(width: w, height: h - footerH, seed: 7))
+        let frame = try XCTUnwrap(Self.stackVertically([body, footer]))
+
+        // advance=20, stickyBottom=10 → strip from y=70 to y=90 (above footer)
+        let strip = try XCTUnwrap(ScrollStitcher.contentStrip(
+            frame: frame, advance: 20, stickyTop: 0, stickyBottom: footerH
+        ))
+        XCTAssertEqual(strip.height, 20)
+        XCTAssertEqual(strip.width, w)
+
+        // strip 不应包含 footer（灰色 r≈50）
+        let avgR = Self.averageChannel(strip, offset: 0)
+        XCTAssertNotEqual(avgR, 50, accuracy: 10, "strip should be content, not footer")
+    }
+
+    /// 端到端：带有 sticky footer 的两帧经 ScrollStitchSession 拼接后，
+    /// footer 在最终输出中只出现一次（不在中间重复）。
+    /// 使用足够高的帧使 measureAdvance 探针不与 footer 重叠。
+    func testStickyFooterNotDuplicatedInOutput() throws {
+        let w = 48
+        let footerH = 4
+        let bodyH = 200
+        let advance = 40
+        // total h = 204; probe ends at ~198, footer at 200-203 → no overlap
+
+        let footer = try XCTUnwrap(Self.makeSolid(width: w, height: footerH, r: 50, g: 50, b: 50))
+
+        // frame1 body = [topOnly] + [shared]
+        let topOnly = try XCTUnwrap(Self.makeNoise(width: w, height: advance, seed: 300))
+        let shared = try XCTUnwrap(Self.makeNoise(width: w, height: bodyH - advance, seed: 101))
+        let body1 = try XCTUnwrap(Self.stackVertically([topOnly, shared]))
+
+        // frame2 body = [shared] + [newContent]
+        let newContent = try XCTUnwrap(Self.makeNoise(width: w, height: advance, seed: 400))
+        let body2 = try XCTUnwrap(Self.stackVertically([shared, newContent]))
+
+        let frame1 = try XCTUnwrap(Self.stackVertically([body1, footer]))
+        let frame2 = try XCTUnwrap(Self.stackVertically([body2, footer]))
+        XCTAssertEqual(frame1.height, bodyH + footerH)
+
+        let session = ScrollStitchSession(firstFrame: frame1, detectSticky: true)
+        let result = session.append(incoming: [frame2])
+        XCTAssertEqual(result.acceptedFrames.count, 1, "frame2 should be accepted")
+
+        let output = try XCTUnwrap(session.makeFullImage())
+        XCTAssertEqual(output.width, w)
+
+        // footer 只在底部出现一次；输出高度 ≈ bodyH + advance + footerH
+        // stickyBottom 可能因膨胀略大于 footerH，但总高度不变
+        let expectedH = bodyH + advance + footerH
+        XCTAssertEqual(output.height, expectedH, accuracy: 4,
+                       "footer should appear once at bottom, not duplicated")
+
+        // 底部应为 footer 颜色（灰色 r≈50）
+        let bottomStrip = try XCTUnwrap(
+            output.cropping(to: CGRect(x: 0, y: output.height - footerH, width: w, height: footerH).integral)
+        )
+        let avgR = Self.averageChannel(bottomStrip, offset: 0)
+        XCTAssertEqual(avgR, 50, accuracy: 15, "bottom should be sticky footer")
+
+        // footer 上方应不是 footer 颜色（应为新内容噪声）
+        let aboveFooter = try XCTUnwrap(
+            output.cropping(to: CGRect(x: 0, y: output.height - footerH - 10, width: w, height: 10).integral)
+        )
+        let avgRAbove = Self.averageChannel(aboveFooter, offset: 0)
+        XCTAssertNotEqual(avgRAbove, 50, accuracy: 15, "above footer should be content, not footer")
+    }
+
+    /// 带有 sticky header 的帧：header 在输出顶部保留。
+    func testStickyHeaderPreservedAtTop() throws {
+        let w = 48
+        let headerH = 20
+        let bodyH = 80
+        let advance = 40
+
+        let header = try XCTUnwrap(Self.makeSolid(width: w, height: headerH, r: 200, g: 100, b: 0))
+        let body1 = try XCTUnwrap(Self.makeNoise(width: w, height: bodyH, seed: 301))
+        let sharedBand = try XCTUnwrap(Self.makeNoise(width: w, height: bodyH - advance, seed: 301))
+        let newBand = try XCTUnwrap(Self.makeNoise(width: w, height: advance, seed: 402))
+        let body2 = try XCTUnwrap(Self.stackVertically([newBand, sharedBand]))
+
+        let frame1 = try XCTUnwrap(Self.stackVertically([header, body1]))
+        let frame2 = try XCTUnwrap(Self.stackVertically([header, body2]))
+
+        let session = ScrollStitchSession(firstFrame: frame1, detectSticky: true)
+        _ = session.append(incoming: [frame2])
+        let output = try XCTUnwrap(session.makeFullImage())
+
+        // 顶部应为 header 颜色
+        let topStrip = try XCTUnwrap(
+            output.cropping(to: CGRect(x: 0, y: 0, width: w, height: headerH).integral)
+        )
+        let avgR = Self.averageChannel(topStrip, offset: 0)
+        XCTAssertEqual(avgR, 200, accuracy: 10, "top should be sticky header")
+    }
+
+    // MARK: - Helpers
+
+    private static func makeSolid(width: Int, height: Int, r: UInt8, g: UInt8 = 0, b: UInt8 = 0) -> CGImage? {
+        let cs = CGColorSpaceCreateDeviceRGB()
+        var data = [UInt8](repeating: 0, count: width * height * 4)
+        for i in stride(from: 0, to: data.count, by: 4) {
+            data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255
+        }
+        guard let provider = CGDataProvider(data: Data(data) as CFData) else { return nil }
+        return CGImage(
+            width: width, height: height,
+            bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+            space: cs,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        )
+    }
+
+    private static func makeNoise(width: Int, height: Int, seed: UInt64) -> CGImage? {
+        var rng = seed &+ 0x9E3779B97F4A7C15
+        func nextByte() -> UInt8 {
+            rng = rng &* 6364136223846793005 &+ 1
+            return UInt8(truncatingIfNeeded: rng >> 33)
+        }
+        let cs = CGColorSpaceCreateDeviceRGB()
+        var data = [UInt8](repeating: 0, count: width * height * 4)
+        for i in stride(from: 0, to: data.count, by: 4) {
+            let v = nextByte()
+            data[i] = v; data[i + 1] = v; data[i + 2] = v; data[i + 3] = 255
+        }
+        guard let provider = CGDataProvider(data: Data(data) as CFData),
+              let image = CGImage(
+                width: width, height: height,
+                bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                space: cs,
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+              )
+        else { return nil }
+        return image
+    }
+
+    private static func stackVertically(_ images: [CGImage]) -> CGImage? {
+        guard let first = images.first else { return nil }
+        let width = first.width
+        let totalH = images.reduce(0) { $0 + $1.height }
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil, width: width, height: totalH,
+            bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        var y = totalH
+        for img in images {
+            y -= img.height
+            ctx.draw(img, in: CGRect(x: 0, y: y, width: img.width, height: img.height))
+        }
+        return ctx.makeImage()
+    }
+
+    private static func averageChannel(_ image: CGImage, offset: Int) -> Double {
+        let w = image.width, h = image.height
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return 0 }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var sum = 0.0, n = 0.0
+        var i = offset
+        while i < px.count {
+            sum += Double(px[i]); n += 1; i += 4
+        }
+        return n > 0 ? sum / n : 0
     }
 }
 
