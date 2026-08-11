@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Build Release PinSnap.app and pack a styled drag-install DMG into dist/.
+# After success, dist/ keeps only the .dmg (staging app and other junk are removed).
 #
 # Learnings from common create-dmg tutorials:
 # - Prefer create-dmg over hand-rolled Finder AppleScript
@@ -7,7 +8,7 @@
 # - Do not bake app/Applications icons into the background — only guides (arrow)
 # - Use --app-drop-link / --hide-extension / --volicon
 #
-# SKIP_BUILD=1 ./scripts/make-dmg.sh  — reuse existing dist/PinSnap.app
+# SKIP_BUILD=1 ./scripts/make-dmg.sh  — reuse last Release build under build/DerivedData
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -46,6 +47,10 @@ eject_vol() {
   fi
 }
 
+find_built_app() {
+  find "$ROOT/build/DerivedData/Build/Products/$CONFIG" -name 'PinSnap.app' -type d 2>/dev/null | head -1
+}
+
 if [[ "$SKIP_BUILD" != "1" ]]; then
   if ! security find-identity -v -p codesigning | grep -q "\"$IDENTITY\""; then
     echo "error: no valid codesigning identity named \"$IDENTITY\"." >&2
@@ -61,21 +66,11 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
     CODE_SIGN_STYLE=Manual \
     CODE_SIGN_IDENTITY="$IDENTITY" \
     build
-
-  APP="$(find "$ROOT/build/DerivedData/Build/Products/$CONFIG" -name 'PinSnap.app' -type d | head -1)"
-  if [[ -z "$APP" || ! -d "$APP" ]]; then
-    echo "error: PinSnap.app not found under build/DerivedData" >&2
-    exit 1
-  fi
-
-  mkdir -p "$OUT_DIR"
-  rm -rf "$OUT_DIR/PinSnap.app"
-  ditto "$APP" "$OUT_DIR/PinSnap.app"
 fi
 
-APP_BUNDLE="$OUT_DIR/PinSnap.app"
-if [[ ! -d "$APP_BUNDLE" ]]; then
-  echo "error: missing $APP_BUNDLE (build first or omit SKIP_BUILD=1)" >&2
+APP="$(find_built_app)"
+if [[ -z "$APP" || ! -d "$APP" ]]; then
+  echo "error: PinSnap.app not found under build/DerivedData (run without SKIP_BUILD=1)" >&2
   exit 1
 fi
 if [[ ! -f "$BG_SRC" ]]; then
@@ -91,14 +86,14 @@ STAGE="$WORK/stage"
 BG_WORK="$WORK/background.png"
 trap 'rm -rf "$WORK"' EXIT
 
-mkdir -p "$STAGE"
-ditto "$APP_BUNDLE" "$STAGE/PinSnap.app"
+mkdir -p "$STAGE" "$OUT_DIR"
+ditto "$APP" "$STAGE/PinSnap.app"
 
 # Retina: 1320×800 px + 144 DPI ⇒ 660×400 pt (matches --window-size)
 ditto "$BG_SRC" "$BG_WORK"
 sips -s dpiWidth 144 -s dpiHeight 144 "$BG_WORK" >/dev/null
 
-VOLICON="$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+VOLICON="$STAGE/PinSnap.app/Contents/Resources/AppIcon.icns"
 DMG="$OUT_DIR/$DMG_NAME"
 rm -f "$DMG"
 
@@ -118,5 +113,14 @@ create-dmg \
   "$DMG" \
   "$STAGE"
 
+# dist/ 仅保留最终 dmg
+while IFS= read -r -d '' item; do
+  base="$(basename "$item")"
+  if [[ "$base" != "$DMG_NAME" ]]; then
+    rm -rf "$item"
+  fi
+done < <(find "$OUT_DIR" -mindepth 1 -maxdepth 1 -print0)
+
 echo "Created $DMG"
 ls -lh "$DMG"
+ls -la "$OUT_DIR"

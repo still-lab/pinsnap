@@ -36,6 +36,37 @@ public enum ScreenPermission {
         return CGRequestScreenCaptureAccess()
     }
 
+    /// 截图前确保屏幕录制可用：未授权时弹出系统权限框；刚授权则重启 App；仍拒绝则可选深链设置。
+    /// - Returns: `true` 表示可立即截帧；`false` 表示已拒绝、或正在重启。
+    @MainActor
+    public static func ensureReadyForCapture(openSettingsIfDenied: Bool) -> Bool {
+        noteLaunch()
+        switch status() {
+        case .granted:
+            return true
+        case .grantedNeedsRelaunch:
+            PinSnapLog.capture.info("screen recording granted; relaunching to apply TCC")
+            relaunchApp()
+            return false
+        case .denied:
+            let granted = requestAccess()
+            if granted {
+                // 多数系统版本需重启后 SCK 才生效；若本进程已可用则直接继续。
+                if isReadyForCapture() {
+                    return true
+                }
+                PinSnapLog.capture.info("screen recording just granted; relaunching")
+                relaunchApp()
+                return false
+            }
+            if openSettingsIfDenied {
+                openSystemSettings()
+            }
+            PinSnapLog.capture.error("screen recording denied after system prompt")
+            return false
+        }
+    }
+
     public static func openSystemSettings() {
         let candidates = [
             "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture",

@@ -110,14 +110,12 @@ public final class SessionCoordinator {
         guard state == .idle || state == .preparing else { return }
         state = .preparing
 
-        // 未授权时不要调用 ScreenCaptureKit：系统会每次都弹「想要录制屏幕」对话框。
-        if !CGPreflightScreenCaptureAccess() {
-            state = .idle
-            if !didOpenScreenSettingsThisProcess {
+        // 未授权时主动弹出系统「屏幕录制」权限框；拒绝后再深链设置（本进程一次）。
+        if !ScreenPermission.ensureReadyForCapture(openSettingsIfDenied: !didOpenScreenSettingsThisProcess) {
+            if !CGPreflightScreenCaptureAccess() {
                 didOpenScreenSettingsThisProcess = true
-                ScreenPermission.openSystemSettings()
             }
-            PinSnapLog.capture.error("skip capture: screen recording not granted")
+            state = .idle
             return
         }
 
@@ -138,6 +136,10 @@ public final class SessionCoordinator {
         } catch CaptureError.permissionDenied {
             state = .idle
             PinSnapLog.capture.error("capture permissionDenied")
+            if !didOpenScreenSettingsThisProcess {
+                didOpenScreenSettingsThisProcess = true
+                ScreenPermission.openSystemSettings()
+            }
         } catch {
             state = .idle
             PinSnapLog.capture.error("capture failed: \(error.localizedDescription)")
