@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-/// 长截操作条：自动滚 / 完成 / 取消（对齐 iShot Stop Scroll + 完成）。
+/// 长截操作条：自动滚动 / 完成 / 取消（样式对齐 `CaptureToolbar`）。
 @MainActor
 final class ScrollCaptureDoneBar: NSPanel {
     var onDone: (() -> Void)?
@@ -10,12 +10,23 @@ final class ScrollCaptureDoneBar: NSPanel {
 
     private let buttonSize: CGFloat = 30
     private let barHeight: CGFloat = 40
-    private let barWidth: CGFloat = 140
+    private let sidePad: CGFloat = 10
+    private let gap: CGFloat = 8
+    private let selectionGap: CGFloat = 12
+    private let idleTint = NSColor(calibratedWhite: 0.2, alpha: 1)
+
+    private var barWidth: CGFloat {
+        // 3 按钮 + 1 分隔 + 左右 padding + spacing
+        sidePad * 2 + buttonSize * 3 + gap * 3 + 1
+    }
+
     private var autoButton: NSButton?
+    private var isAutoOn = false
 
     init() {
+        let w = sidePad * 2 + 30 * 3 + 8 * 3 + 1
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: barWidth, height: barHeight),
+            contentRect: NSRect(x: 0, y: 0, width: w, height: barHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -29,7 +40,7 @@ final class ScrollCaptureDoneBar: NSPanel {
         ignoresMouseEvents = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
-        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: barWidth, height: barHeight))
+        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: w, height: barHeight))
         chrome.material = .popover
         chrome.blendingMode = .withinWindow
         chrome.state = .active
@@ -43,12 +54,11 @@ final class ScrollCaptureDoneBar: NSPanel {
 
         let row = NSStackView()
         row.orientation = .horizontal
-        row.spacing = 8
+        row.spacing = gap
         row.alignment = .centerY
-        row.edgeInsets = NSEdgeInsets(top: 5, left: 10, bottom: 5, right: 10)
+        row.edgeInsets = NSEdgeInsets(top: 5, left: sidePad, bottom: 5, right: sidePad)
         row.translatesAutoresizingMaskIntoConstraints = false
         chrome.addSubview(row)
-
         NSLayoutConstraint.activate([
             row.leadingAnchor.constraint(equalTo: chrome.leadingAnchor),
             row.trailingAnchor.constraint(equalTo: chrome.trailingAnchor),
@@ -56,54 +66,75 @@ final class ScrollCaptureDoneBar: NSPanel {
             row.bottomAnchor.constraint(equalTo: chrome.bottomAnchor),
         ])
 
-        let auto = iconButton("arrow.down.to.line", tip: "自动滚动", #selector(autoClicked))
+        let auto = actionBtn("arrow.down.to.line", tip: "自动滚动", #selector(autoClicked))
+        auto.setButtonType(.toggle)
         autoButton = auto
         row.addArrangedSubview(auto)
-        row.addArrangedSubview(iconButton("checkmark", tip: "完成", #selector(doneClicked)))
-        row.addArrangedSubview(iconButton("xmark", tip: "取消", #selector(cancelClicked)))
+        row.addArrangedSubview(sep())
+        row.addArrangedSubview(actionBtn("checkmark", tip: "完成", #selector(doneClicked)))
+        row.addArrangedSubview(actionBtn("xmark", tip: "取消", #selector(cancelClicked)))
 
         contentView = chrome
     }
 
     func setAutoScrolling(_ on: Bool) {
+        isAutoOn = on
         let name = on ? "stop.fill" : "arrow.down.to.line"
         let tip = on ? "停止滚动" : "自动滚动"
-        let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
-        autoButton?.image = NSImage(systemSymbolName: name, accessibilityDescription: tip)?
-            .withSymbolConfiguration(cfg)
+        autoButton?.image = NSImage(systemSymbolName: name, accessibilityDescription: tip)
+        autoButton?.image?.isTemplate = true
         autoButton?.toolTip = tip
+        autoButton?.state = on ? .on : .off
+        autoButton?.contentTintColor = on ? .controlAccentColor : idleTint
     }
 
     func place(near selection: CGRect, inScreenBounds screen: CGRect) {
         let w = barWidth
         let h = barHeight
         var x = selection.midX - w / 2
-        var y = selection.minY - h - 12
-        if y < screen.minY + 8 {
-            y = min(selection.maxY + 12, screen.maxY - h - 8)
+        var y = selection.minY - h - selectionGap
+        if y < screen.minY + 2 {
+            y = min(selection.maxY + selectionGap, screen.maxY - h - 2)
         }
-        x = min(max(x, screen.minX + 8), screen.maxX - w - 8)
+        x = min(max(x, screen.minX + 2), screen.maxX - w - 2)
         setFrame(NSRect(x: x, y: y, width: w, height: h), display: true)
         orderFrontRegardless()
     }
 
-    private func iconButton(_ symbol: String, tip: String, _ selector: Selector) -> NSButton {
+    private func actionBtn(_ symbol: String, tip: String, _ sel: Selector) -> NSButton {
         let b = NSButton(frame: NSRect(x: 0, y: 0, width: buttonSize, height: buttonSize))
         b.bezelStyle = .shadowlessSquare
         b.isBordered = false
+        b.setButtonType(.momentaryLight)
         b.imagePosition = .imageOnly
-        b.imageScaling = .scaleProportionallyDown
-        let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
-        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
-            .withSymbolConfiguration(cfg)
-        b.contentTintColor = NSColor(calibratedWhite: 0.2, alpha: 1)
+        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
+        b.image?.isTemplate = true
+        b.contentTintColor = idleTint
         b.toolTip = tip
         b.target = self
-        b.action = selector
-        b.setButtonType(.momentaryChange)
-        b.widthAnchor.constraint(equalToConstant: buttonSize).isActive = true
-        b.heightAnchor.constraint(equalToConstant: buttonSize).isActive = true
+        b.action = sel
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.setContentHuggingPriority(.required, for: .horizontal)
+        b.setContentCompressionResistancePriority(.required, for: .horizontal)
+        NSLayoutConstraint.activate([
+            b.widthAnchor.constraint(equalToConstant: buttonSize),
+            b.heightAnchor.constraint(equalToConstant: buttonSize),
+        ])
         return b
+    }
+
+    private func sep() -> NSView {
+        let v = NSView()
+        v.wantsLayer = true
+        v.layer?.backgroundColor = NSColor(calibratedWhite: 0.55, alpha: 0.45).cgColor
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.setContentHuggingPriority(.required, for: .horizontal)
+        v.setContentCompressionResistancePriority(.required, for: .horizontal)
+        NSLayoutConstraint.activate([
+            v.widthAnchor.constraint(equalToConstant: 1),
+            v.heightAnchor.constraint(equalToConstant: 18),
+        ])
+        return v
     }
 
     @objc private func doneClicked() { onDone?() }
