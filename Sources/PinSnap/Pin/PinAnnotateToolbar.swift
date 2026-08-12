@@ -19,14 +19,14 @@ protocol PinAnnotateToolbarDelegate: AnyObject {
 final class PinAnnotateToolbar: NSPanel {
     weak var actionHandler: PinAnnotateToolbarDelegate?
 
-    private let buttonSize: CGFloat = 30
-    private let rowHeight: CGFloat = 40
-    private let sidePad: CGFloat = 10
-    private let gap: CGFloat = 8
-    private let barWidth: CGFloat = 420
-    private let subRowExtra: CGFloat = 34
+    private let buttonSize: CGFloat = 26
+    private let rowHeight: CGFloat = 34
+    private let sidePad: CGFloat = 6
+    private let gap: CGFloat = 4
+    private let barWidth: CGFloat = 300
+    private let subRowExtra: CGFloat = 28
     private let dividerHeight: CGFloat = 1
-    private let selectionGap: CGFloat = 12
+    private let selectionGap: CGFloat = 8
 
     private var selectedTool: CaptureAnnotateTool?
     private var shapeStyle: CaptureShapeStyle = .rect
@@ -73,7 +73,7 @@ final class PinAnnotateToolbar: NSPanel {
         chrome.state = .active
         chrome.appearance = NSAppearance(named: .vibrantLight)
         chrome.wantsLayer = true
-        chrome.layer?.cornerRadius = 10
+        chrome.layer?.cornerRadius = 8
         chrome.layer?.masksToBounds = true
         chrome.autoresizingMask = [.width, .height]
 
@@ -86,13 +86,13 @@ final class PinAnnotateToolbar: NSPanel {
         row1.orientation = .horizontal
         row1.spacing = gap
         row1.alignment = .centerY
-        row1.edgeInsets = NSEdgeInsets(top: 5, left: sidePad, bottom: 5, right: sidePad)
+        row1.edgeInsets = NSEdgeInsets(top: 4, left: sidePad, bottom: 4, right: sidePad)
         row1.translatesAutoresizingMaskIntoConstraints = false
 
         row2.orientation = .horizontal
         row2.spacing = gap
         row2.alignment = .centerY
-        row2.edgeInsets = NSEdgeInsets(top: 4, left: sidePad, bottom: 5, right: sidePad)
+        row2.edgeInsets = NSEdgeInsets(top: 3, left: sidePad, bottom: 3, right: sidePad)
         row2.isHidden = true
         row2.translatesAutoresizingMaskIntoConstraints = false
 
@@ -221,7 +221,7 @@ final class PinAnnotateToolbar: NSPanel {
                 b.attributedTitle = NSAttributedString(
                     string: "T",
                     attributes: [
-                        .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
+                        .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
                         .foregroundColor: on ? NSColor.controlAccentColor : idle,
                     ]
                 )
@@ -311,7 +311,7 @@ final class PinAnnotateToolbar: NSPanel {
         v.wantsLayer = true
         v.layer?.backgroundColor = NSColor.separatorColor.cgColor
         v.widthAnchor.constraint(equalToConstant: 1).isActive = true
-        v.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        v.heightAnchor.constraint(equalToConstant: 14).isActive = true
         return v
     }
 

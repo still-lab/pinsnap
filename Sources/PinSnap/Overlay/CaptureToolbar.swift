@@ -24,15 +24,15 @@ protocol CaptureToolbarDelegate: AnyObject {
 final class CaptureToolbar: NSPanel {
     weak var actionHandler: CaptureToolbarDelegate?
 
-    private let buttonSize: CGFloat = 30
-    private let rowHeight: CGFloat = 40
-    private let sidePad: CGFloat = 10
-    private let gap: CGFloat = 8
-    private let barWidth: CGFloat = 566
-    private let subRowExtra: CGFloat = 34
+    private let buttonSize: CGFloat = 26
+    private let rowHeight: CGFloat = 34
+    private let sidePad: CGFloat = 6
+    private let gap: CGFloat = 4
+    private let barWidth: CGFloat = 448
+    private let subRowExtra: CGFloat = 28
     private let dividerHeight: CGFloat = 1
     /// 工具条与选区之间的间距
-    private let selectionGap: CGFloat = 12
+    private let selectionGap: CGFloat = 8
 
     private var selectedTool: CaptureAnnotateTool?
     private var shapeStyle: CaptureShapeStyle = .rect
@@ -66,7 +66,7 @@ final class CaptureToolbar: NSPanel {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 566, height: rowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: barWidth, height: rowHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -86,7 +86,7 @@ final class CaptureToolbar: NSPanel {
         chrome.state = .active
         chrome.appearance = NSAppearance(named: .vibrantLight)
         chrome.wantsLayer = true
-        chrome.layer?.cornerRadius = 10
+        chrome.layer?.cornerRadius = 8
         chrome.layer?.masksToBounds = true
         chrome.layer?.borderWidth = 0.5
         chrome.layer?.borderColor = NSColor.white.withAlphaComponent(0.65).cgColor
@@ -102,7 +102,7 @@ final class CaptureToolbar: NSPanel {
         row1.spacing = gap
         row1.alignment = .centerY
         row1.distribution = .gravityAreas
-        row1.edgeInsets = NSEdgeInsets(top: 5, left: sidePad, bottom: 5, right: sidePad)
+        row1.edgeInsets = NSEdgeInsets(top: 4, left: sidePad, bottom: 4, right: sidePad)
         row1.translatesAutoresizingMaskIntoConstraints = false
         row1.setHuggingPriority(.defaultHigh, for: .horizontal)
 
@@ -110,7 +110,7 @@ final class CaptureToolbar: NSPanel {
         row2.spacing = gap
         row2.alignment = .centerY
         row2.distribution = .gravityAreas
-        row2.edgeInsets = NSEdgeInsets(top: 4, left: sidePad, bottom: 5, right: sidePad)
+        row2.edgeInsets = NSEdgeInsets(top: 3, left: sidePad, bottom: 3, right: sidePad)
         row2.isHidden = true
         row2.translatesAutoresizingMaskIntoConstraints = false
         row2.setHuggingPriority(.defaultHigh, for: .horizontal)
@@ -136,9 +136,9 @@ final class CaptureToolbar: NSPanel {
         row1.addArrangedSubview(eyedropperButton)
         row1.addArrangedSubview(actionBtn("doc.text.magnifyingglass", tip: "OCR", #selector(ocrAction)))
         row1.addArrangedSubview(actionBtn("arrow.up.arrow.down", tip: "上下长截", #selector(scrollCaptureAction)))
-        row1.addArrangedSubview(actionBtn("doc.on.doc", tip: "复制", #selector(copyAction)))
-        row1.addArrangedSubview(actionBtn("square.and.arrow.down", tip: "保存", #selector(saveAction)))
         row1.addArrangedSubview(actionBtn("pin", tip: "贴图", #selector(pinAction)))
+        row1.addArrangedSubview(actionBtn("square.and.arrow.down", tip: "保存", #selector(saveAction)))
+        row1.addArrangedSubview(actionBtn("doc.on.doc", tip: "复制", #selector(copyAction)))
         row1.addArrangedSubview(actionBtn("xmark", tip: "关闭", #selector(closeAction)))
 
         configureSubStack(shapeSubStack)
@@ -308,7 +308,7 @@ final class CaptureToolbar: NSPanel {
                 b.attributedTitle = NSAttributedString(
                     string: "T",
                     attributes: [
-                        .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
+                        .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
                         .foregroundColor: color,
                     ]
                 )
@@ -399,7 +399,7 @@ final class CaptureToolbar: NSPanel {
         b.attributedTitle = NSAttributedString(
             string: glyph,
             attributes: [
-                .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
+                .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
                 .foregroundColor: idle,
             ]
         )
@@ -423,7 +423,7 @@ final class CaptureToolbar: NSPanel {
         v.setContentCompressionResistancePriority(.required, for: .horizontal)
         NSLayoutConstraint.activate([
             v.widthAnchor.constraint(equalToConstant: 1),
-            v.heightAnchor.constraint(equalToConstant: 18),
+            v.heightAnchor.constraint(equalToConstant: 14),
         ])
         return v
     }

@@ -8,11 +8,11 @@ final class ScrollCaptureDoneBar: NSPanel {
     var onCancel: (() -> Void)?
     var onToggleAutoScroll: (() -> Void)?
 
-    private let buttonSize: CGFloat = 30
-    private let barHeight: CGFloat = 40
-    private let sidePad: CGFloat = 10
-    private let gap: CGFloat = 8
-    private let selectionGap: CGFloat = 12
+    private let buttonSize: CGFloat = 26
+    private let barHeight: CGFloat = 34
+    private let sidePad: CGFloat = 6
+    private let gap: CGFloat = 4
+    private let selectionGap: CGFloat = 8
     private let idleTint = NSColor(calibratedWhite: 0.2, alpha: 1)
 
     private var barWidth: CGFloat {
@@ -24,7 +24,7 @@ final class ScrollCaptureDoneBar: NSPanel {
     private var isAutoOn = false
 
     init() {
-        let w = sidePad * 2 + 30 * 3 + 8 * 3 + 1
+        let w = sidePad * 2 + buttonSize * 3 + gap * 3 + 1
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: w, height: barHeight),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -46,7 +46,7 @@ final class ScrollCaptureDoneBar: NSPanel {
         chrome.state = .active
         chrome.appearance = NSAppearance(named: .vibrantLight)
         chrome.wantsLayer = true
-        chrome.layer?.cornerRadius = 10
+        chrome.layer?.cornerRadius = 8
         chrome.layer?.masksToBounds = true
         chrome.layer?.borderWidth = 0.5
         chrome.layer?.borderColor = NSColor.white.withAlphaComponent(0.65).cgColor
@@ -56,7 +56,7 @@ final class ScrollCaptureDoneBar: NSPanel {
         row.orientation = .horizontal
         row.spacing = gap
         row.alignment = .centerY
-        row.edgeInsets = NSEdgeInsets(top: 5, left: sidePad, bottom: 5, right: sidePad)
+        row.edgeInsets = NSEdgeInsets(top: 4, left: sidePad, bottom: 4, right: sidePad)
         row.translatesAutoresizingMaskIntoConstraints = false
         chrome.addSubview(row)
         NSLayoutConstraint.activate([
@@ -132,7 +132,7 @@ final class ScrollCaptureDoneBar: NSPanel {
         v.setContentCompressionResistancePriority(.required, for: .horizontal)
         NSLayoutConstraint.activate([
             v.widthAnchor.constraint(equalToConstant: 1),
-            v.heightAnchor.constraint(equalToConstant: 18),
+            v.heightAnchor.constraint(equalToConstant: 14),
         ])
         return v
     }
