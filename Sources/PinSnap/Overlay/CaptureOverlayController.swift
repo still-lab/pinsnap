@@ -76,6 +76,10 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     private var annotateStart: CGPoint?
     private var moveGrabStart: CGPoint?
     private var moveOriginRect: CGRect?
+    private var resizeHandle: SelectionResizeHandle?
+    private var resizeGrabStart: CGPoint?
+    private var resizeOriginRect: CGRect?
+    private var resizeStartShapes: [Shape] = []
 
     private var lastHoverSample = Date.distantPast
     private let hoverInterval: TimeInterval = 1.0 / 30.0
@@ -191,6 +195,14 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         annotateStart = nil
         moveGrabStart = nil
         moveOriginRect = nil
+        clearResizeSession()
+    }
+
+    private func clearResizeSession() {
+        resizeHandle = nil
+        resizeGrabStart = nil
+        resizeOriginRect = nil
+        resizeStartShapes = []
     }
 
     private func installEscapeHatches() {
@@ -472,8 +484,32 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             NSCursor.closedHand.set()
             return
         }
-        guard selectionLocked, activeTool == .text, let sel = selection, sel.logicalRect.contains(global) else {
+        if let handle = resizeHandle {
+            SelectionResize.cursor(for: handle).set()
+            return
+        }
+        if moveGrabStart != nil {
+            NSCursor.closedHand.set()
+            return
+        }
+        if selectionLocked, !isScrollCapturing, activeTool == nil, let sel = selection {
+            if let handle = SelectionResize.hitTest(point: global, rect: sel.logicalRect) {
+                SelectionResize.cursor(for: handle).set()
+                return
+            }
+            if sel.logicalRect.contains(global) {
+                NSCursor.openHand.set()
+                return
+            }
             NSCursor.arrow.set()
+            return
+        }
+        guard selectionLocked, activeTool == .text, let sel = selection, sel.logicalRect.contains(global) else {
+            if !selectionLocked {
+                NSCursor.crosshair.set()
+            } else {
+                NSCursor.arrow.set()
+            }
             return
         }
         let local = toSelectionLocal(global)
@@ -513,6 +549,23 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     // MARK: - Annotate
 
     private func handleAnnotateMouseDown(at global: CGPoint) {
+        // 边缘 / 四角：拖拽调整选区（无标注工具时）
+        if !isScrollCapturing,
+           activeTool == nil,
+           !isColorPicking,
+           !isOCRSelecting,
+           let sel = selection,
+           let handle = SelectionResize.hitTest(point: global, rect: sel.logicalRect) {
+            resizeHandle = handle
+            resizeGrabStart = global
+            resizeOriginRect = sel.logicalRect
+            resizeStartShapes = annotations.document.shapes
+            moveGrabStart = nil
+            moveOriginRect = nil
+            SelectionResize.cursor(for: handle).set()
+            return
+        }
+
         guard let sel = selection, sel.logicalRect.contains(global) else {
             // 浮动长截结果：点在图外直接关闭
             if isFloatingResult {
@@ -530,6 +583,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             draftShape = nil
             moveGrabStart = nil
             moveOriginRect = nil
+            clearResizeSession()
             syncLayers()
             return
         }
@@ -537,6 +591,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         if activeTool == nil {
             moveGrabStart = global
             moveOriginRect = sel.logicalRect
+            NSCursor.closedHand.set()
             return
         }
 
@@ -584,6 +639,40 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             }
             return
         }
+        if let handle = resizeHandle,
+           let grab = resizeGrabStart,
+           let origin = resizeOriginRect,
+           let sel = selection,
+           let screen = geometry.screen(id: sel.screenID) {
+            let translation = CGVector(dx: global.x - grab.x, dy: global.y - grab.y)
+            let rect = SelectionResize.resizedRect(
+                from: origin,
+                handle: handle,
+                translation: translation,
+                bounds: screen.logicalFrame
+            )
+            guard rect.width >= SelectionResize.minSize.width,
+                  rect.height >= SelectionResize.minSize.height else { return }
+            selection = CaptureSelection(screenID: sel.screenID, logicalRect: rect)
+            let shift = CGPoint(x: origin.minX - rect.minX, y: origin.minY - rect.minY)
+            if !resizeStartShapes.isEmpty, (shift.x != 0 || shift.y != 0) {
+                let shifted = resizeStartShapes.map { shape -> Shape in
+                    var copy = shape
+                    copy.points = shape.points.map {
+                        CGPoint(x: $0.x + shift.x, y: $0.y + shift.y)
+                    }
+                    return copy
+                }
+                annotations.replaceShapesLive(shifted)
+            } else if !resizeStartShapes.isEmpty {
+                annotations.replaceShapesLive(resizeStartShapes)
+            }
+            applySelectionFrameToFloatingPanel(rect)
+            repositionToolbar()
+            SelectionResize.cursor(for: handle).set()
+            syncLayers()
+            return
+        }
         if let grab = moveGrabStart, let origin = moveOriginRect, activeTool == nil {
             let dx = global.x - grab.x
             let dy = global.y - grab.y
@@ -600,14 +689,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
                 } else {
                     selection = next
                 }
-                if isFloatingResult, let panel = panels.first {
-                    panel.setFrame(rect, display: true)
-                    if var frame = frames.first {
-                        frame.logicalBounds = rect
-                        frames = [frame]
-                        (panel.contentView as? OverlayView)?.screenFrame = frame
-                    }
-                }
+                applySelectionFrameToFloatingPanel(selection?.logicalRect ?? rect)
                 repositionToolbar()
                 syncLayers()
             }
@@ -622,6 +704,16 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         }
         draftShape = draft
         syncLayers()
+    }
+
+    private func applySelectionFrameToFloatingPanel(_ rect: CGRect) {
+        guard isFloatingResult, let panel = panels.first else { return }
+        panel.setFrame(rect, display: true)
+        if var frame = frames.first {
+            frame.logicalBounds = rect
+            frames = [frame]
+            (panel.contentView as? OverlayView)?.screenFrame = frame
+        }
     }
 
     private func handleAnnotateMouseUp(at global: CGPoint) {
@@ -643,6 +735,13 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             moveGrabStart = nil
             moveOriginRect = nil
             showToolbar()
+            updateCursor(at: global)
+            return
+        }
+        if resizeHandle != nil {
+            clearResizeSession()
+            showToolbar()
+            updateCursor(at: global)
             return
         }
         guard var draft = draftShape else {

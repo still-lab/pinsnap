@@ -1074,3 +1074,49 @@ final class HotKeyPreferencesTests: XCTestCase {
         XCTAssertTrue(prefs.conflictedSlots().isEmpty)
     }
 }
+
+final class SelectionResizeTests: XCTestCase {
+    func testHitPrefersCorners() {
+        let rect = CGRect(x: 100, y: 100, width: 200, height: 150)
+        XCTAssertEqual(SelectionResize.hitTest(point: CGPoint(x: 100, y: 250), rect: rect), .nw)
+        XCTAssertEqual(SelectionResize.hitTest(point: CGPoint(x: 300, y: 100), rect: rect), .se)
+        XCTAssertEqual(SelectionResize.hitTest(point: CGPoint(x: 200, y: 250), rect: rect), .n)
+        XCTAssertEqual(SelectionResize.hitTest(point: CGPoint(x: 100, y: 175), rect: rect), .w)
+        XCTAssertNil(SelectionResize.hitTest(point: CGPoint(x: 200, y: 175), rect: rect))
+    }
+
+    func testResizeEastAndWestRespectMinSize() {
+        let origin = CGRect(x: 50, y: 40, width: 100, height: 80)
+        let bounds = CGRect(x: 0, y: 0, width: 400, height: 300)
+        let wider = SelectionResize.resizedRect(
+            from: origin,
+            handle: .e,
+            translation: CGVector(dx: 30, dy: 0),
+            bounds: bounds
+        )
+        XCTAssertEqual(wider.width, 130, accuracy: 0.1)
+        XCTAssertEqual(wider.minX, 50, accuracy: 0.1)
+
+        let shrinkPastMin = SelectionResize.resizedRect(
+            from: origin,
+            handle: .w,
+            translation: CGVector(dx: 200, dy: 0),
+            bounds: bounds
+        )
+        XCTAssertEqual(shrinkPastMin.width, SelectionResize.minSize.width, accuracy: 0.1)
+        XCTAssertEqual(shrinkPastMin.maxX, origin.maxX, accuracy: 0.1)
+    }
+
+    func testResizeClampedToBounds() {
+        let origin = CGRect(x: 10, y: 10, width: 100, height: 80)
+        let bounds = CGRect(x: 0, y: 0, width: 200, height: 200)
+        let out = SelectionResize.resizedRect(
+            from: origin,
+            handle: .n,
+            translation: CGVector(dx: 0, dy: 500),
+            bounds: bounds
+        )
+        XCTAssertEqual(out.maxY, bounds.maxY, accuracy: 0.1)
+        XCTAssertEqual(out.minY, origin.minY, accuracy: 0.1)
+    }
+}

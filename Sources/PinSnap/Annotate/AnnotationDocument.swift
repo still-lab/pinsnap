@@ -113,6 +113,13 @@ public final class AnnotationController: AnnotationControlling {
         document = next
     }
 
+    /// 选区原点变化时同步本地坐标（不进撤销栈）。
+    public func replaceShapesLive(_ shapes: [Shape]) {
+        var next = document
+        next.shapes = shapes
+        document = next
+    }
+
     public func undo() {
         guard let previous = undoStack.popLast() else { return }
         redoStack.append(document)
