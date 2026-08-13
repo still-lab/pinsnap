@@ -16,7 +16,6 @@ protocol CaptureToolbarDelegate: AnyObject {
     func toolbarCopy()
     func toolbarSave()
     func toolbarPin()
-    func toolbarClose()
 }
 
 /// 两层工具条：点「形状」「箭头」「马赛克」展开第二层子项。宽度固定，避免子栏撑开。
@@ -28,7 +27,7 @@ final class CaptureToolbar: NSPanel {
     private let rowHeight: CGFloat = 34
     private let sidePad: CGFloat = 6
     private let gap: CGFloat = 4
-    private let barWidth: CGFloat = 448
+    private let barWidth: CGFloat = 418
     private let subRowExtra: CGFloat = 28
     private let dividerHeight: CGFloat = 1
     /// 工具条与选区之间的间距
@@ -139,7 +138,6 @@ final class CaptureToolbar: NSPanel {
         row1.addArrangedSubview(actionBtn("pin", tip: "贴图", #selector(pinAction)))
         row1.addArrangedSubview(actionBtn("square.and.arrow.down", tip: "保存", #selector(saveAction)))
         row1.addArrangedSubview(actionBtn("doc.on.doc", tip: "复制", #selector(copyAction)))
-        row1.addArrangedSubview(actionBtn("xmark", tip: "关闭", #selector(closeAction)))
 
         configureSubStack(shapeSubStack)
         rectButton = iconBtn("rectangle", tip: "矩形", tag: 100)
@@ -501,5 +499,4 @@ final class CaptureToolbar: NSPanel {
     @objc private func copyAction() { actionHandler?.toolbarCopy() }
     @objc private func saveAction() { actionHandler?.toolbarSave() }
     @objc private func pinAction() { actionHandler?.toolbarPin() }
-    @objc private func closeAction() { actionHandler?.toolbarClose() }
 }

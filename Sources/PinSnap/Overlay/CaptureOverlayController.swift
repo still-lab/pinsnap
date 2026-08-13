@@ -1071,14 +1071,6 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
     func toolbarSave() { commitSave() }
     func toolbarPin() { commitPin() }
-    func toolbarClose() {
-        if isScrollCapturing {
-            stopScrollCapture(commit: false)
-            cancel()
-            return
-        }
-        cancel()
-    }
     func toolbarScrollCapture() {
         if isFloatingResult { return }
         // 长截中再点一次 = 完成
