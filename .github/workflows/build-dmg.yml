@@ -19,7 +19,8 @@ permissions:
 jobs:
   build-release:
     name: Build DMG & Publish Release
-    runs-on: macos-14
+    # macos-15 ships Xcode 16, required for xcodegen's objectVersion 77 projects
+    runs-on: macos-15
     timeout-minutes: 40
     steps:
       - name: Checkout
