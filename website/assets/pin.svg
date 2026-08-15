@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 80" width="64" height="80">
+  <!-- 针体（后层） -->
+  <line x1="46" y1="26" x2="46" y2="72" stroke="#2c7a28" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- 针尖阴影点 -->
+  <circle cx="46" cy="73" r="3" fill="#1e6b20"/>
+  <!-- 颈部锥形 -->
+  <path d="M40 22 L52 20 L52 30 L42 30 Z" fill="#6da532"/>
+  <!-- 头部（旋转的胶囊） -->
+  <g transform="rotate(-14 30 16)">
+    <rect x="4" y="2" width="52" height="30" rx="15" fill="#83bc40"/>
+    <rect x="4" y="2" width="52" height="30" rx="15" fill="url(#pinShine)" opacity="0.55"/>
+    <rect x="9" y="7" width="42" height="8" rx="4" fill="#a9d96c" opacity="0.7"/>
+    <rect x="4" y="2" width="52" height="30" rx="15" fill="none" stroke="#5f9a2e" stroke-width="1"/>
+  </g>
+  <!-- 高光光斑 -->
+  <ellipse cx="22" cy="10" rx="7" ry="4" fill="#ffffff" opacity="0.5" transform="rotate(-14 30 16)"/>
+  <defs>
+    <linearGradient id="pinShine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.5"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#4a7a20" stop-opacity="0.4"/>
+    </linearGradient>
+  </defs>
+</svg>

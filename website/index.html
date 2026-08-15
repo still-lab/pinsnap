@@ -30,20 +30,14 @@
 
 <main id="top">
 
-  <!-- HERO：macOS 桌面即画布 -->
+  <!-- HERO -->
   <section class="hero">
-    <div class="hero-bg" aria-hidden="true">
-      <span class="bg-glow bg-glow-a"></span>
-      <span class="bg-glow bg-glow-b"></span>
-      <span class="bg-grid"></span>
-    </div>
-
     <div class="hero-inner">
       <div class="hero-copy">
         <p class="eyebrow hero-eyebrow">macOS 截图与贴图工具</p>
         <h1 class="hero-title">
           <span class="t-line">截图，然后</span>
-          <span class="t-line t-line-accent">钉住它</span>
+          <span class="t-line t-line-accent">钉住它。</span>
         </h1>
         <p class="hero-sub">截屏、标注、贴图置顶。全程本地处理，不联网，不传图。</p>
         <div class="hero-cta">
@@ -54,86 +48,65 @@
       </div>
 
       <div class="hero-stage" aria-hidden="true">
-        <!-- macOS 桌面：菜单栏 -->
-        <div class="mac-menubar">
-          <div class="mb-left">
-            <span class="mb-apple">&#63743;</span>
-            <span class="mb-app-name">PinSnap</span>
-            <span class="mb-sep"></span>
-            <span class="mb-item">文件</span>
-            <span class="mb-item">编辑</span>
-            <span class="mb-item mb-active">截图</span>
-            <span class="mb-item">窗口</span>
+        <!-- 截图界面模拟 -->
+        <div class="shot-preview">
+          <div class="sp-menubar">
+            <span class="spm-apple">&#63743;</span>
+            <span class="spm-name">PinSnap</span>
+            <span class="spm-sep"></span>
+            <span class="spm-item">文件</span>
+            <span class="spm-item">编辑</span>
+            <span class="spm-item spm-active">截图</span>
+            <span class="spm-item">窗口</span>
           </div>
-          <div class="mb-right">
-            <span class="mb-status">Wi-Fi</span>
-            <span class="mb-status">100%</span>
-            <span class="mb-status">08:15</span>
-          </div>
-        </div>
-        <!-- 壁纸 -->
-        <div class="mac-wall">
-          <span class="wall-mountain wall-m-1"></span>
-          <span class="wall-mountain wall-m-2"></span>
-          <span class="wall-sun"></span>
-        </div>
-        <!-- 贴图窗口堆 -->
-        <div class="pin-stack">
-          <div class="pin-card pin-card-back">
-            <div class="pc-titlebar">
-              <span class="pc-dot"></span><span class="pc-dot"></span><span class="pc-dot"></span>
-              <span class="pc-name">周报.png</span>
+          <div class="sp-content">
+            <div class="sp-sidebar">
+              <span class="sp-tool"></span>
+              <span class="sp-tool sp-tool-on"></span>
+              <span class="sp-tool"></span>
+              <span class="sp-tool"></span>
+              <span class="sp-tool"></span>
             </div>
-            <div class="pin-chart">
-              <span class="bar bar-1"></span>
-              <span class="bar bar-2"></span>
-              <span class="bar bar-3"></span>
-              <span class="bar bar-4"></span>
-              <span class="bar bar-5"></span>
-            </div>
-          </div>
-          <div class="pin-card pin-card-mid">
-            <div class="pc-titlebar">
-              <span class="pc-dot"></span><span class="pc-dot"></span><span class="pc-dot"></span>
-              <span class="pc-name">设计稿.png</span>
-            </div>
-            <div class="pin-photo">
-              <span class="sun"></span>
-              <span class="hill hill-1"></span>
-              <span class="hill hill-2"></span>
-            </div>
-          </div>
-          <div class="pin-card pin-card-front">
-            <div class="pc-titlebar">
-              <span class="pc-dot"></span><span class="pc-dot"></span><span class="pc-dot"></span>
-              <span class="pc-name">代码片段.png</span>
-            </div>
-            <div class="pin-annotate">
-              <span class="ann-rect"></span>
-              <span class="ann-arrow"></span>
-              <span class="ann-text"></span>
-              <span class="ann-marker"></span>
+            <div class="sp-canvas">
+              <div class="spc-window">
+                <span class="spcw-titlebar">
+                  <span class="spcw-dot"></span><span class="spcw-dot"></span><span class="spcw-dot"></span>
+                </span>
+                <div class="spcw-body">
+                  <span class="spcw-chart">
+                    <span class="c-bar" style="--h:40%"></span>
+                    <span class="c-bar" style="--h:72%"></span>
+                    <span class="c-bar" style="--h:55%"></span>
+                    <span class="c-bar" style="--h:88%"></span>
+                    <span class="c-bar" style="--h:62%"></span>
+                    <span class="c-bar" style="--h:34%"></span>
+                  </span>
+                  <span class="spcw-lines">
+                    <span></span><span></span><span></span><span></span>
+                  </span>
+                </div>
+              </div>
+              <!-- 选区标注 -->
+              <div class="spc-selection">
+                <span class="spcs-size">960 × 640</span>
+              </div>
+              <!-- 贴图卡片 -->
+              <div class="spc-pin">
+                <span class="spcp-img"></span>
+                <span class="spcp-label">贴图置顶</span>
+              </div>
             </div>
           </div>
-        </div>
-        <!-- 干净的选区标注 -->
-        <div class="sel-mark">
-          <span class="sel-size">1920 × 1080</span>
-        </div>
-        <!-- HUD 提示 -->
-        <div class="hint-chip hint-main">
-          <span class="chip-key">F1</span>
-          <span class="chip-label">区域截图</span>
-        </div>
-        <div class="hint-chip hint-alt">
-          <span class="chip-key">F3</span>
-          <span class="chip-label">贴图</span>
+          <div class="sp-statusbar">
+            <span class="sps-left">F1 截图 · F3 贴图</span>
+            <span class="sps-right">100%</span>
+          </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- 功能：桌面贴图横排 -->
+  <!-- 功能 -->
   <section class="section" id="features">
     <div class="section-head">
       <p class="eyebrow">它能做什么</p>
@@ -141,7 +114,7 @@
       <p class="section-sub">常用动作一个快捷键直达。没有主窗口，没有图库，用完即走。</p>
     </div>
 
-    <div class="feature-rail">
+    <div class="feature-grid">
       <article class="feat-card">
         <div class="feat-top">
           <span class="feat-key">⌘</span>
@@ -209,11 +182,11 @@
         <h3>取色与放大镜</h3>
         <p>吸管精确取色，HEX 与 RGB 双格式。C 键复制，色卡直接贴屏。</p>
         <div class="feat-demo feat-demo-swatch" aria-hidden="true">
+          <span class="fs-swatch" style="--sw:#83BC40"></span>
+          <span class="fs-swatch" style="--sw:#4F8CFF"></span>
           <span class="fs-swatch" style="--sw:#F0A63E"></span>
-          <span class="fs-swatch" style="--sw:#5B8DEF"></span>
-          <span class="fs-swatch" style="--sw:#7B61FF"></span>
-          <span class="fs-swatch" style="--sw:#2EC27E"></span>
-          <span class="fs-hex">#F0A63E</span>
+          <span class="fs-swatch" style="--sw:#FF5F57"></span>
+          <span class="fs-hex">#83BC40</span>
         </div>
       </article>
 
@@ -232,7 +205,7 @@
     </div>
   </section>
 
-  <!-- 快捷键：左文右键盘 -->
+  <!-- 快捷键 -->
   <section class="section section-dark" id="shortcuts">
     <div class="shortcuts-grid">
       <div class="shortcuts-copy">
@@ -274,29 +247,23 @@
       </div>
 
       <div class="shortcuts-visual" aria-hidden="true">
-        <div class="board">
-          <span class="board-grid"></span>
-          <div class="board-card board-card-a">
-            <span class="bc-bars">
-              <span class="bc-bar" style="--h:40%"></span>
-              <span class="bc-bar" style="--h:72%"></span>
-              <span class="bc-bar" style="--h:55%"></span>
-              <span class="bc-bar" style="--h:88%"></span>
-              <span class="bc-bar" style="--h:62%"></span>
-              <span class="bc-bar" style="--h:34%"></span>
+        <div class="dark-desk">
+          <div class="dark-card dark-card-a">
+            <span class="dc-bars">
+              <span class="dc-bar" style="--h:45%"></span>
+              <span class="dc-bar" style="--h:70%"></span>
+              <span class="dc-bar" style="--h:55%"></span>
+              <span class="dc-bar" style="--h:85%"></span>
+              <span class="dc-bar" style="--h:60%"></span>
             </span>
           </div>
-          <div class="board-card board-card-b">
-            <span class="bc-lines"><span></span><span></span><span></span></span>
+          <div class="dark-card dark-card-b">
+            <span class="dc-lines"><span></span><span></span><span></span></span>
           </div>
-          <div class="board-sel">
-            <span class="bs-handle bs-tl"></span>
-            <span class="bs-handle bs-tr"></span>
-            <span class="bs-handle bs-bl"></span>
-            <span class="bs-handle bs-br"></span>
-            <span class="bs-tag">拖选区域</span>
+          <div class="dark-select">
+            <span class="ds-tag">拖选区域</span>
           </div>
-          <div class="board-chip">
+          <div class="dark-chip">
             <span class="chip-key">⌘S</span>
             <span class="chip-label">快捷保存</span>
           </div>

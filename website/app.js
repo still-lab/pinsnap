@@ -47,10 +47,10 @@
     });
   }
 
-  /* 3. 贴图堆鼠标视差 */
+  /* 3. Hero 预览轻量视差 */
   var stage = document.querySelector(".hero-stage");
-  var pinStack = document.querySelector(".pin-stack");
-  if (stage && pinStack && !reduceMotion && window.matchMedia("(pointer: fine)").matches) {
+  var preview = document.querySelector(".shot-preview");
+  if (stage && preview && !reduceMotion && window.matchMedia("(pointer: fine)").matches) {
     var rafId = null;
     var tx = 0, ty = 0;
     stage.addEventListener("mousemove", function (e) {
@@ -59,16 +59,16 @@
       ty = (e.clientY - (r.top + r.height / 2)) / r.height;
       if (rafId) return;
       rafId = requestAnimationFrame(function () {
-        pinStack.style.transform =
-          "translate3d(" + tx * 10 + "px, " + ty * 8 + "px, 0)";
+        preview.style.transform =
+          "perspective(1400px) rotateY(" + (tx * 5 - 4) + "deg) rotateX(" + (1 - ty * 2) + "deg)";
         rafId = null;
       });
     });
     stage.addEventListener("mouseleave", function () {
-      pinStack.style.transition = "transform .8s cubic-bezier(.2,.7,.2,1)";
-      pinStack.style.transform = "translate3d(0,0,0)";
+      preview.style.transition = "transform .8s cubic-bezier(.2,.7,.2,1)";
+      preview.style.transform = "perspective(1400px) rotateY(-4deg) rotateX(1deg)";
       setTimeout(function () {
-        pinStack.style.transition = "";
+        preview.style.transition = "";
       }, 800);
     });
   }
