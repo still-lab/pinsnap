@@ -19,6 +19,7 @@ let package = Package(
                 .linkedFramework("CoreImage"),
                 .linkedFramework("CoreVideo"),
                 .linkedFramework("ScreenCaptureKit"),
+                .linkedFramework("ServiceManagement"),
                 .linkedFramework("StoreKit"),
                 .linkedFramework("Vision"),
                 .linkedFramework("AVFoundation"),

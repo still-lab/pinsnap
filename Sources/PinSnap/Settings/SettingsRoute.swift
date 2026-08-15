@@ -58,10 +58,20 @@ public struct SettingsRootView: View {
 private struct GeneralSettingsPage: View {
     @AppStorage(ColorValueFormat.defaultsKey) private var colorFormat = ColorValueFormat.hex.rawValue
     @AppStorage(AppBootstrap.hotKeysDisabledDefaultsKey) private var hotKeysDisabled = true
+    @ObservedObject private var launchAtLogin = LaunchAtLogin.shared
 
     var body: some View {
         Form {
             Section {
+                Toggle(
+                    "开机启动",
+                    isOn: Binding(
+                        get: { launchAtLogin.isEnabled },
+                        set: { launchAtLogin.setEnabled($0) }
+                    )
+                )
+                .padding(.vertical, 6)
+
                 Picker("取色格式", selection: $colorFormat) {
                     Text("HEX").tag(ColorValueFormat.hex.rawValue)
                     Text("RGB").tag(ColorValueFormat.rgb.rawValue)
@@ -85,6 +95,10 @@ private struct GeneralSettingsPage: View {
         .formStyle(.grouped)
         .onAppear {
             hotKeysDisabled = AppBootstrap.shared.hotKeysDisabled
+            launchAtLogin.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            launchAtLogin.refresh()
         }
     }
 }

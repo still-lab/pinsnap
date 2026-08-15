@@ -348,7 +348,7 @@
 ## F7 设置补全
 
 - [ ] F-080 快捷键录制控件真改绑定
-- [ ] F-081 开机启动 SMAppService
+- [x] F-081 开机启动 SMAppService
 - [ ] F-082 文件名模板（Pro 可编辑）
 - [ ] F-083 存储格式 png/jpeg
 - [ ] F-084 所有文案进 xcstrings 中英

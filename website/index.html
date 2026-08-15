@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PinSnap — macOS 截图与贴图</title>
+<meta name="description" content="PinSnap 是菜单栏常驻的 macOS 截图与贴图工具。区域/窗口截图、矢量标注、一键贴图置顶，全部本地处理。">
+<meta property="og:title" content="PinSnap — macOS 截图与贴图">
+<meta property="og:description" content="菜单栏常驻的 macOS 截图贴图工具。截图、标注、贴图置顶，本地处理，不上传。">
+<meta property="og:image" content="/assets/icon-512.png">
+<link rel="icon" type="image/png" href="/assets/icon-256.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#top">
+      <img src="assets/icon-256.png" alt="PinSnap 图标" width="26" height="26">
+      <span>PinSnap</span>
+    </a>
+    <nav class="nav-links" aria-label="主导航">
+      <a href="#features">功能</a>
+      <a href="#shortcuts">快捷键</a>
+      <a href="#pricing">定价</a>
+    </nav>
+    <a class="btn btn-primary nav-cta" href="#download">下载</a>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO：macOS 桌面即画布 -->
+  <section class="hero">
+    <div class="hero-bg" aria-hidden="true">
+      <span class="bg-glow bg-glow-a"></span>
+      <span class="bg-glow bg-glow-b"></span>
+      <span class="bg-grid"></span>
+    </div>
+
+    <div class="hero-inner">
+      <div class="hero-copy">
+        <p class="eyebrow hero-eyebrow">macOS 截图与贴图工具</p>
+        <h1 class="hero-title">
+          <span class="t-line">截图，然后</span>
+          <span class="t-line t-line-accent">钉住它</span>
+        </h1>
+        <p class="hero-sub">截屏、标注、贴图置顶。全程本地处理，不联网，不传图。</p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="#download">下载试用版</a>
+          <a class="btn btn-ghost" href="#features">看功能</a>
+        </div>
+        <p class="hero-note">macOS 13.0+ · Universal · 仅 Mac App Store</p>
+      </div>
+
+      <div class="hero-stage" aria-hidden="true">
+        <!-- macOS 桌面：菜单栏 -->
+        <div class="mac-menubar">
+          <div class="mb-left">
+            <span class="mb-apple">&#63743;</span>
+            <span class="mb-app-name">PinSnap</span>
+            <span class="mb-sep"></span>
+            <span class="mb-item">文件</span>
+            <span class="mb-item">编辑</span>
+            <span class="mb-item mb-active">截图</span>
+            <span class="mb-item">窗口</span>
+          </div>
+          <div class="mb-right">
+            <span class="mb-status">Wi-Fi</span>
+            <span class="mb-status">100%</span>
+            <span class="mb-status">08:15</span>
+          </div>
+        </div>
+        <!-- 壁纸 -->
+        <div class="mac-wall">
+          <span class="wall-mountain wall-m-1"></span>
+          <span class="wall-mountain wall-m-2"></span>
+          <span class="wall-sun"></span>
+        </div>
+        <!-- 贴图窗口堆 -->
+        <div class="pin-stack">
+          <div class="pin-card pin-card-back">
+            <div class="pc-titlebar">
+              <span class="pc-dot"></span><span class="pc-dot"></span><span class="pc-dot"></span>
+              <span class="pc-name">周报.png</span>
+            </div>
+            <div class="pin-chart">
+              <span class="bar bar-1"></span>
+              <span class="bar bar-2"></span>
+              <span class="bar bar-3"></span>
+              <span class="bar bar-4"></span>
+              <span class="bar bar-5"></span>
+            </div>
+          </div>
+          <div class="pin-card pin-card-mid">
+            <div class="pc-titlebar">
+              <span class="pc-dot"></span><span class="pc-dot"></span><span class="pc-dot"></span>
+              <span class="pc-name">设计稿.png</span>
+            </div>
+            <div class="pin-photo">
+              <span class="sun"></span>
+              <span class="hill hill-1"></span>
+              <span class="hill hill-2"></span>
+            </div>
+          </div>
+          <div class="pin-card pin-card-front">
+            <div class="pc-titlebar">
+              <span class="pc-dot"></span><span class="pc-dot"></span><span class="pc-dot"></span>
+              <span class="pc-name">代码片段.png</span>
+            </div>
+            <div class="pin-annotate">
+              <span class="ann-rect"></span>
+              <span class="ann-arrow"></span>
+              <span class="ann-text"></span>
+              <span class="ann-marker"></span>
+            </div>
+          </div>
+        </div>
+        <!-- 干净的选区标注 -->
+        <div class="sel-mark">
+          <span class="sel-size">1920 × 1080</span>
+        </div>
+        <!-- HUD 提示 -->
+        <div class="hint-chip hint-main">
+          <span class="chip-key">F1</span>
+          <span class="chip-label">区域截图</span>
+        </div>
+        <div class="hint-chip hint-alt">
+          <span class="chip-key">F3</span>
+          <span class="chip-label">贴图</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 功能：桌面贴图横排 -->
+  <section class="section" id="features">
+    <div class="section-head">
+      <p class="eyebrow">它能做什么</p>
+      <h2>把屏幕变成<br>你的工作台</h2>
+      <p class="section-sub">常用动作一个快捷键直达。没有主窗口，没有图库，用完即走。</p>
+    </div>
+
+    <div class="feature-rail">
+      <article class="feat-card">
+        <div class="feat-top">
+          <span class="feat-key">⌘</span>
+          <span class="feat-num">01</span>
+        </div>
+        <h3>区域与窗口截图</h3>
+        <p>框选任意区域，或按窗口吸附。Retina 多屏，选中即所得。</p>
+        <div class="feat-demo feat-demo-rect" aria-hidden="true">
+          <span class="fd-window">
+            <span class="fd-dot"></span><span class="fd-dot"></span><span class="fd-dot"></span>
+          </span>
+          <span class="fd-rect"></span>
+        </div>
+      </article>
+
+      <article class="feat-card">
+        <div class="feat-top">
+          <span class="feat-key">✎</span>
+          <span class="feat-num">02</span>
+        </div>
+        <h3>矢量标注</h3>
+        <p>矩形、箭头、记号笔、模糊、橡皮。标注不改像素，导出始终高清。</p>
+        <div class="feat-demo feat-demo-mark" aria-hidden="true">
+          <span class="fm-arrow"></span>
+          <span class="fm-rect"></span>
+          <span class="fm-marker"></span>
+          <span class="fm-blur"></span>
+        </div>
+      </article>
+
+      <article class="feat-card">
+        <div class="feat-top">
+          <span class="feat-key">F3</span>
+          <span class="feat-num">03</span>
+        </div>
+        <h3>贴图置顶</h3>
+        <p>把截图、图片、文本、色卡钉在屏幕最上层。滚轮缩放，随时对照。</p>
+        <div class="feat-demo feat-demo-pin" aria-hidden="true">
+          <span class="fp-card"></span>
+          <span class="fp-card fp-card-2"></span>
+          <span class="fp-card fp-card-3"></span>
+        </div>
+      </article>
+
+      <article class="feat-card">
+        <div class="feat-top">
+          <span class="feat-key">⌘T</span>
+          <span class="feat-num">04</span>
+        </div>
+        <h3>延时与上次区域</h3>
+        <p>延时 5 秒，从容打开菜单再截。F1 连按，重复上次选区。</p>
+        <div class="feat-demo feat-demo-timer" aria-hidden="true">
+          <span class="ft-ring">
+            <span class="ft-num">5</span>
+          </span>
+          <span class="ft-sec">秒</span>
+        </div>
+      </article>
+
+      <article class="feat-card">
+        <div class="feat-top">
+          <span class="feat-key">⌥</span>
+          <span class="feat-num">05</span>
+        </div>
+        <h3>取色与放大镜</h3>
+        <p>吸管精确取色，HEX 与 RGB 双格式。C 键复制，色卡直接贴屏。</p>
+        <div class="feat-demo feat-demo-swatch" aria-hidden="true">
+          <span class="fs-swatch" style="--sw:#F0A63E"></span>
+          <span class="fs-swatch" style="--sw:#5B8DEF"></span>
+          <span class="fs-swatch" style="--sw:#7B61FF"></span>
+          <span class="fs-swatch" style="--sw:#2EC27E"></span>
+          <span class="fs-hex">#F0A63E</span>
+        </div>
+      </article>
+
+      <article class="feat-card">
+        <div class="feat-top">
+          <span class="feat-key">🔒</span>
+          <span class="feat-num">06</span>
+        </div>
+        <h3>本地处理</h3>
+        <p>截图只在你设备上完成。无第三方分析，无云端中转，不传图。</p>
+        <div class="feat-demo feat-demo-lock" aria-hidden="true">
+          <span class="fl-badge">不上传</span>
+          <span class="fl-check">✓</span>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- 快捷键：左文右键盘 -->
+  <section class="section section-dark" id="shortcuts">
+    <div class="shortcuts-grid">
+      <div class="shortcuts-copy">
+        <p class="eyebrow">全局快捷键</p>
+        <h2>不打断思路的操作</h2>
+        <p>所有高频动作都有全局热键。菜单栏保持精简，熟练后甚至可以不看图标。</p>
+        <div class="kbd-list">
+          <div class="kbd-row">
+            <span class="kbd-row-keys"><kbd>F1</kbd></span>
+            <span class="kbd-row-label">区域截图</span>
+            <span class="kbd-row-desc">默认热键</span>
+          </div>
+          <div class="kbd-row">
+            <span class="kbd-row-keys"><kbd>F1</kbd><kbd>F1</kbd></span>
+            <span class="kbd-row-label">上次区域</span>
+            <span class="kbd-row-desc">连按两次</span>
+          </div>
+          <div class="kbd-row">
+            <span class="kbd-row-keys"><kbd>F3</kbd></span>
+            <span class="kbd-row-label">贴图</span>
+            <span class="kbd-row-desc">剪贴板即贴</span>
+          </div>
+          <div class="kbd-row">
+            <span class="kbd-row-keys"><kbd>⌘</kbd><kbd>T</kbd></span>
+            <span class="kbd-row-label">延时截图</span>
+            <span class="kbd-row-desc">5 秒倒计时</span>
+          </div>
+          <div class="kbd-row">
+            <span class="kbd-row-keys"><kbd>⌘</kbd><kbd>H</kbd></span>
+            <span class="kbd-row-label">隐藏全部贴图</span>
+            <span class="kbd-row-desc">再按恢复</span>
+          </div>
+          <div class="kbd-row">
+            <span class="kbd-row-keys"><kbd>⌘</kbd><kbd>⇧</kbd><kbd>H</kbd></span>
+            <span class="kbd-row-label">显示贴图</span>
+            <span class="kbd-row-desc">快捷保存用 ⌘S</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="shortcuts-visual" aria-hidden="true">
+        <div class="board">
+          <span class="board-grid"></span>
+          <div class="board-card board-card-a">
+            <span class="bc-bars">
+              <span class="bc-bar" style="--h:40%"></span>
+              <span class="bc-bar" style="--h:72%"></span>
+              <span class="bc-bar" style="--h:55%"></span>
+              <span class="bc-bar" style="--h:88%"></span>
+              <span class="bc-bar" style="--h:62%"></span>
+              <span class="bc-bar" style="--h:34%"></span>
+            </span>
+          </div>
+          <div class="board-card board-card-b">
+            <span class="bc-lines"><span></span><span></span><span></span></span>
+          </div>
+          <div class="board-sel">
+            <span class="bs-handle bs-tl"></span>
+            <span class="bs-handle bs-tr"></span>
+            <span class="bs-handle bs-bl"></span>
+            <span class="bs-handle bs-br"></span>
+            <span class="bs-tag">拖选区域</span>
+          </div>
+          <div class="board-chip">
+            <span class="chip-key">⌘S</span>
+            <span class="chip-label">快捷保存</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 定价 -->
+  <section class="section" id="pricing">
+    <div class="section-head">
+      <p class="eyebrow">价格</p>
+      <h2>简单直接的定价</h2>
+      <p class="section-sub">免费版无时间限制，Pro 解锁全部能力。</p>
+    </div>
+
+    <div class="pricing">
+      <article class="price-card">
+        <h3>Free</h3>
+        <div class="price"><span class="amount">¥0</span></div>
+        <ul>
+          <li>同时最多 3 张贴图</li>
+          <li>全部截图与标注功能</li>
+          <li>无水印</li>
+          <li>无时间限制</li>
+        </ul>
+        <a class="btn btn-ghost" href="#download">下载</a>
+      </article>
+
+      <article class="price-card price-pro">
+        <span class="pro-tag">推荐</span>
+        <h3>Pro</h3>
+        <div class="price"><span class="amount">¥8</span><span class="period">/ 月</span></div>
+        <ul>
+          <li>无限贴图数量</li>
+          <li>完整贴图生命周期管理</li>
+          <li>后续 Pro 功能优先解锁</li>
+          <li>支持独立开发者</li>
+        </ul>
+        <a class="btn btn-primary" href="#download">升级 Pro</a>
+      </article>
+
+      <article class="price-card">
+        <h3>Pro 买断</h3>
+        <div class="price"><span class="amount">¥98</span><span class="period"> 终身</span></div>
+        <ul>
+          <li>一次购买，终身使用</li>
+          <li>包含全部 Pro 能力</li>
+          <li>年度 ¥48 另有优惠</li>
+          <li>随版本更新持续可用</li>
+        </ul>
+        <a class="btn btn-ghost" href="#download">买断</a>
+      </article>
+    </div>
+  </section>
+
+  <!-- 下载 -->
+  <section class="section section-download" id="download">
+    <div class="download-box">
+      <img class="dl-icon" src="assets/icon-512.png" alt="PinSnap 图标" width="88" height="88">
+      <h2>开始截图</h2>
+      <p>macOS 13.0 及以上，Intel 与 Apple 芯片通用。</p>
+      <a class="btn btn-primary btn-lg" href="/PinSnap-1.0.0-trial.dmg">下载试用版</a>
+      <p class="dl-note">约 2.8 MB · 试用版无功能限制</p>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="assets/icon-256.png" alt="" width="20" height="20">
+      <span>PinSnap</span>
+    </div>
+    <nav class="footer-links" aria-label="页脚导航">
+      <a href="#features">功能</a>
+      <a href="#shortcuts">快捷键</a>
+      <a href="#pricing">定价</a>
+      <a href="#download">下载</a>
+    </nav>
+    <p class="footer-note">© 2026 PinSnap · 本地处理，不上传</p>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

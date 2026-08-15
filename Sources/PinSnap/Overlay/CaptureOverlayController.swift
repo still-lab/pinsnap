@@ -1082,19 +1082,18 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
     }
 
     // MARK: - Scroll capture (long screenshot)
-    // 完全对齐 iShot MXClipView（r2 核验）：
-    // 100ms 首帧；deltaY<0 立刻截 + 重置 60ms；Δ≥0 忽略；idle 只补截不退出；
-    // 帧数组+SAD+10px blend；自动滚 CGEvent(line) 注入；显式完成才导出。
+    // 首帧延迟后采种；滚轮只重置 settle，停稳再截（避免运动中亚像素帧叠影）；
+    // 自动滚注入后同样走 settle；条带硬接（无 alpha 羽化）。
 
     private static let scrollFirstFrameDelayNs: UInt64 = 100_000_000
-    private static let scrollSettleInterval: TimeInterval = 0.06
+    /// 停稳后再截；需 < autoInterval，否则自动滚期间 settle 永远被重置。
+    private static let scrollSettleInterval: TimeInterval = 0.09
     private static let scrollDeltaNoise: CGFloat = 0.5
-    private static let scrollAutoInterval: TimeInterval = 0.12
+    private static let scrollAutoInterval: TimeInterval = 0.14
     private static let scrollAutoWheelLines: Int32 = 3
 
     private enum ScrollCaptureTrigger {
         case firstFrame
-        case wheel
         case settle
     }
 
@@ -1224,15 +1223,8 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
         let deltaY = event.scrollingDeltaY
         guard abs(deltaY) > Self.scrollDeltaNoise else { return }
         guard deltaY < 0 else { return }
-
+        // 只重置停稳计时；运动中截帧易亚像素错位 → 全程重影
         resetScrollIdleTimer()
-        if scrollCaptureBusy {
-            scrollNeedsRecapture = true
-            return
-        }
-        Task { @MainActor in
-            await self.captureScrollFrame(trigger: .wheel)
-        }
     }
 
     private func captureScrollFrame(trigger: ScrollCaptureTrigger) async {
@@ -1247,7 +1239,7 @@ public final class CaptureOverlayController: NSObject, CaptureToolbarDelegate {
             if isScrollCapturing, scrollNeedsRecapture {
                 scrollNeedsRecapture = false
                 Task { @MainActor in
-                    await self.captureScrollFrame(trigger: .wheel)
+                    await self.captureScrollFrame(trigger: .settle)
                 }
             }
         }

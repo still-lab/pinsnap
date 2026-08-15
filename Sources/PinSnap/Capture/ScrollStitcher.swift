@@ -205,9 +205,10 @@ public enum ScrollStitcher {
     }
 
     /// iShot 推进量（MXClipView `screenShotsAtScrollScreenshots`）：
-    /// 1. 同下标 `sameArr` 计顶/底粘性 → f08/f0c（过大则封顶，避免末段内容带被吃光）
-    /// 2. 指纹行 + 邻行校验 → advance
-    /// 3. 失败时小步进 MAD（对齐失败默认 ~10），避免滚到页尾附近无法再增长
+    /// 1. 同下标 `sameArr` 计顶/底粘性
+    /// 2. 指纹行 + 双侧邻行 + 重叠 MAD 消歧（同分取更大，防估小叠影）
+    /// 3. sameArr 高命中候选按 MAD 优选；再不行则全范围重叠 MAD
+    /// 4. 最终在候选邻域精修，并要求与远邻次优有足够 MAD 分差（歧义则拒帧）
     public static func measureAdvance(
         previous: CGImage,
         next: CGImage,
@@ -243,70 +244,161 @@ public enum ScrollStitcher {
         let maxAdv = max(minAdv, span - max(16, span / 8))
         guard minAdv <= maxAdv else { return nil }
 
+        let seed: Int?
         if let finger = advanceByFingerprint(
             prev: prev, next: nxt, lo: lo, hi: hi,
             minAdv: minAdv, maxAdv: maxAdv, stepX: stepX
         ) {
-            return refineAdvanceByOverlapMAD(
-                prev: prev, next: nxt, lo: lo, hi: hi,
-                center: finger, window: 14,
-                minAdv: minAdv, maxAdv: maxAdv, stepX: stepX
-            )
-        }
-
-        if let byOverlap = advanceByMaxOverlap(
+            seed = finger
+        } else if let byOverlap = advanceByMaxOverlap(
             prev: prev, next: nxt, lo: lo, hi: hi,
             minAdv: minAdv, maxAdv: maxAdv, stepX: stepX
         ) {
-            return refineAdvanceByOverlapMAD(
+            seed = byOverlap
+        } else {
+            seed = advanceByBestOverlapMAD(
                 prev: prev, next: nxt, lo: lo, hi: hi,
-                center: byOverlap, window: 10,
-                minAdv: minAdv, maxAdv: maxAdv, stepX: stepX
+                minAdv: minAdv, maxAdv: maxAdv, stepX: stepX,
+                maxAcceptMAD: 14
             )
         }
-
-        // iShot 指纹失败仍用 w26=10 继续；这里只在「小步进且重叠 MAD 合格」时软回退
-        return advanceBySoftSmallStep(
+        guard let center = seed else { return nil }
+        return acceptAdvanceWithMargin(
             prev: prev, next: nxt, lo: lo, hi: hi,
+            center: center, window: 16,
             minAdv: minAdv, maxAdv: maxAdv, stepX: stepX
         )
     }
 
-    /// 页尾小滚：仅在 minAdv…min(48,maxAdv) 内找 MAD 足够好的步进（默认中心 10）。
-    private static func advanceBySoftSmallStep(
+    /// 在 center 邻域选 MAD 最优（同分更大）；局部 MAD 差则扩到全范围。
+    /// 远处次优过近则拒帧，避免错周期叠影。
+    private static func acceptAdvanceWithMargin(
+        prev: GrayImage,
+        next: GrayImage,
+        lo: Int,
+        hi: Int,
+        center: Int,
+        window: Int,
+        minAdv: Int,
+        maxAdv: Int,
+        stepX: Int
+    ) -> Int? {
+        let span = hi - lo
+
+        func scoreRange(_ loA: Int, _ hiA: Int, fine: Bool) -> (bestA: Int, bestMAD: Double, scores: [(Int, Double)])? {
+            guard loA <= hiA else { return nil }
+            var bestA = loA
+            var bestMAD = Double.infinity
+            var scores: [(Int, Double)] = []
+            for advance in loA...hiA {
+                let overlap = span - advance
+                guard overlap >= 12 else { continue }
+                let mad = overlapBandMAD(
+                    prev: prev, next: next,
+                    prevStart: lo + advance, nextStart: lo,
+                    length: overlap, stepX: stepX, fine: fine
+                )
+                scores.append((advance, mad))
+                if mad < bestMAD - 0.05
+                    || (abs(mad - bestMAD) <= 0.05 && advance > bestA) {
+                    bestMAD = mad
+                    bestA = advance
+                }
+            }
+            guard bestMAD.isFinite else { return nil }
+            return (bestA, bestMAD, scores)
+        }
+
+        let localLo = max(minAdv, center - window)
+        let localHi = min(maxAdv, center + window)
+        guard var result = scoreRange(localLo, localHi, fine: true) else { return nil }
+
+        // 局部谷不深：多半种子落在错周期，改全范围粗搜再精修
+        if result.bestMAD > 8 {
+            let coarseStep = max(1, (maxAdv - minAdv) / 64)
+            var coarseA = minAdv
+            var coarseBestA = center
+            var coarseBestMAD = Double.infinity
+            while coarseA <= maxAdv {
+                let overlap = span - coarseA
+                if overlap >= 12 {
+                    let mad = overlapBandMAD(
+                        prev: prev, next: next,
+                        prevStart: lo + coarseA, nextStart: lo,
+                        length: overlap, stepX: stepX, fine: false
+                    )
+                    if mad < coarseBestMAD - 0.05
+                        || (abs(mad - coarseBestMAD) <= 0.05 && coarseA > coarseBestA) {
+                        coarseBestMAD = mad
+                        coarseBestA = coarseA
+                    }
+                }
+                coarseA += coarseStep
+            }
+            let refinedLo = max(minAdv, coarseBestA - max(8, coarseStep + 4))
+            let refinedHi = min(maxAdv, coarseBestA + max(8, coarseStep + 4))
+            if let wide = scoreRange(refinedLo, refinedHi, fine: true),
+               wide.bestMAD < result.bestMAD - 0.05
+                || (abs(wide.bestMAD - result.bestMAD) <= 0.05 && wide.bestA > result.bestA) {
+                result = wide
+            }
+        }
+
+        guard result.bestMAD < 16 else { return nil }
+
+        // 仅当「明显更小的远处候选」MAD 几乎一样好时拒绝（估小叠影）；噪声图远处次优通常差很多
+        let smallerRival = result.scores
+            .filter { $0.0 <= result.bestA - 4 }
+            .map(\.1)
+            .min()
+        if let rival = smallerRival, rival - result.bestMAD < 0.75, result.bestMAD > 3 {
+            return nil
+        }
+        return result.bestA
+    }
+
+    /// 在 [minAdv, maxAdv] 内最小化重叠带 MAD；同分取更大 advance，避免系统性估小叠影。
+    private static func advanceByBestOverlapMAD(
         prev: GrayImage,
         next: GrayImage,
         lo: Int,
         hi: Int,
         minAdv: Int,
         maxAdv: Int,
-        stepX: Int
+        stepX: Int,
+        maxAcceptMAD: Double
     ) -> Int? {
         let span = hi - lo
-        let hiA = min(maxAdv, max(minAdv, 48))
-        guard minAdv <= hiA else { return nil }
+        guard minAdv <= maxAdv else { return nil }
+        let coarseStep = max(1, (maxAdv - minAdv) / 64)
         var bestA: Int?
         var bestMAD = Double.infinity
-        for advance in minAdv...hiA {
+        var advance = minAdv
+        while advance <= maxAdv {
             let overlap = span - advance
-            guard overlap >= 12 else { continue }
-            let mad = overlapBandMAD(
-                prev: prev, next: next,
-                prevStart: lo + advance, nextStart: lo,
-                length: overlap, stepX: stepX
-            )
-            if mad < bestMAD - 0.05
-                || (abs(mad - bestMAD) <= 0.05 && (bestA == nil || advance < bestA!)) {
-                bestMAD = mad
-                bestA = advance
+            if overlap >= 12 {
+                let mad = overlapBandMAD(
+                    prev: prev, next: next,
+                    prevStart: lo + advance, nextStart: lo,
+                    length: overlap, stepX: stepX, fine: false
+                )
+                if mad < bestMAD - 0.05
+                    || (abs(mad - bestMAD) <= 0.05 && (bestA == nil || advance > bestA!)) {
+                    bestMAD = mad
+                    bestA = advance
+                }
             }
+            advance += coarseStep
         }
-        // 真到底、几乎无推进时 MAD 会很差或最优在噪声里——拒绝以免空转叠字
-        guard let advance = bestA, bestMAD < 18 else { return nil }
-        return advance
+        guard let center = bestA, bestMAD < maxAcceptMAD else { return nil }
+        return refineAdvanceByOverlapMAD(
+            prev: prev, next: next, lo: lo, hi: hi,
+            center: center, window: max(8, coarseStep + 4),
+            minAdv: minAdv, maxAdv: maxAdv, stepX: stepX
+        )
     }
 
-    /// 最大重叠（最小 advance）且 sameArr 行命中率 ≥ 0.88——偏向缝紧，防空洞。
+    /// sameArr 命中率达标的候选里，用重叠 MAD 选优；同分取更大 advance（防估小叠影）。
     private static func advanceByMaxOverlap(
         prev: GrayImage,
         next: GrayImage,
@@ -320,6 +412,8 @@ public enum ScrollStitcher {
         let minOverlap = span - maxAdv
         let maxOverlap = span - minAdv
         guard minOverlap <= maxOverlap else { return nil }
+        var bestA: Int?
+        var bestMAD = Double.infinity
         var k = maxOverlap
         while k >= minOverlap {
             let ratio = overlapSameArrRatio(
@@ -328,11 +422,22 @@ public enum ScrollStitcher {
                 length: k, stepX: stepX
             )
             if ratio >= 0.88 {
-                return span - k
+                let advance = span - k
+                let mad = overlapBandMAD(
+                    prev: prev, next: next,
+                    prevStart: lo + advance, nextStart: lo,
+                    length: k, stepX: stepX, fine: true
+                )
+                if mad < bestMAD - 0.05
+                    || (abs(mad - bestMAD) <= 0.05 && (bestA == nil || advance > bestA!)) {
+                    bestMAD = mad
+                    bestA = advance
+                }
             }
             k -= max(1, k / 64)
         }
-        return nil
+        guard let advance = bestA, bestMAD < 22 else { return nil }
+        return advance
     }
 
     private static func overlapSameArrRatio(
@@ -361,7 +466,7 @@ public enum ScrollStitcher {
         return total == 0 ? 0 : Double(ok) / Double(total)
     }
 
-    /// 特征行：从同下标向下搜首个 sameArr + 邻行校验；多探针取众数，同分取更小。
+    /// 特征行：探针在 prev 中搜匹配；每探针取局部 MAD 最优（同分更大）；众数投票同分取更大。
     private static func advanceByFingerprint(
         prev: GrayImage,
         next: GrayImage,
@@ -378,38 +483,55 @@ public enum ScrollStitcher {
         while yNext < hi - 6 {
             defer { yNext += strideY }
             guard isFingerprintRow(next, y: yNext, stepX: stepX) else { continue }
-            // iShot：从指纹下标起在 prev 中向下搜
-            var yPrev = yNext
-            var found: Int?
+            var yPrev = yNext + minAdv
+            var bestAdv: Int?
+            var bestLocal = Double.infinity
+            var firstHit: Int?
             while yPrev < hi {
                 let adv = yPrev - yNext
                 if adv > maxAdv { break }
-                if adv >= minAdv,
-                   sameArrRow(prev: prev, next: next, prevY: yPrev, nextY: yNext, stepX: stepX),
+                // 首个命中后再多看一段，消掉行周期早匹配，避免扫完整段过慢
+                if let first = firstHit, adv > first + max(32, span / 20) { break }
+                if sameArrRow(prev: prev, next: next, prevY: yPrev, nextY: yNext, stepX: stepX),
                    verifyNeighborRows(
                     prev: prev, next: next,
                     yPrev: yPrev, yNext: yNext,
                     lo: lo, hi: hi, stepX: stepX
                    ) {
-                    found = adv
-                    break
+                    if firstHit == nil { firstHit = adv }
+                    let overlap = span - adv
+                    let local: Double
+                    if overlap >= 12 {
+                        local = overlapBandMAD(
+                            prev: prev, next: next,
+                            prevStart: lo + adv, nextStart: lo,
+                            length: overlap, stepX: stepX, fine: true
+                        )
+                    } else {
+                        local = Double.infinity
+                    }
+                    if local < bestLocal - 0.05
+                        || (abs(local - bestLocal) <= 0.05 && (bestAdv == nil || adv > bestAdv!)) {
+                        bestLocal = local
+                        bestAdv = adv
+                    }
                 }
                 yPrev += 1
             }
-            if let adv = found {
+            if let adv = bestAdv, bestLocal < 28 {
                 votes[adv, default: 0] += 1
             }
         }
         guard let best = votes.max(by: { lhs, rhs in
             if lhs.value != rhs.value { return lhs.value < rhs.value }
-            return lhs.key > rhs.key // 同分取更小 advance
+            return lhs.key < rhs.key // 同分取更大 advance
         }), best.value >= 1 else {
             return nil
         }
         return best.key
     }
 
-    /// 仅在 center±window 内最小化重叠带 MAD。
+    /// 仅在 center±window 内最小化重叠带 MAD；同分取更大 advance（防 1px 估小叠影）。
     private static func refineAdvanceByOverlapMAD(
         prev: GrayImage,
         next: GrayImage,
@@ -424,6 +546,7 @@ public enum ScrollStitcher {
         let span = hi - lo
         let loA = max(minAdv, center - window)
         let hiA = min(maxAdv, center + window)
+        guard loA <= hiA else { return center }
         var bestA = center
         var bestMAD = Double.infinity
         for advance in loA...hiA {
@@ -432,11 +555,10 @@ public enum ScrollStitcher {
             let mad = overlapBandMAD(
                 prev: prev, next: next,
                 prevStart: lo + advance, nextStart: lo,
-                length: overlap, stepX: stepX
+                length: overlap, stepX: stepX, fine: true
             )
-            // 同分偏小 advance，避免精修往大空洞跑
             if mad < bestMAD - 0.05
-                || (abs(mad - bestMAD) <= 0.05 && advance < bestA) {
+                || (abs(mad - bestMAD) <= 0.05 && advance > bestA) {
                 bestMAD = mad
                 bestA = advance
             }
@@ -450,9 +572,10 @@ public enum ScrollStitcher {
         prevStart: Int,
         nextStart: Int,
         length: Int,
-        stepX: Int
+        stepX: Int,
+        fine: Bool = false
     ) -> Double {
-        let stepY = max(1, length / 48)
+        let stepY = fine ? max(1, length / 96) : max(1, length / 48)
         var sad: Int64 = 0
         var count = 0
         var i = 0
@@ -478,17 +601,22 @@ public enum ScrollStitcher {
         hi: Int,
         stepX: Int
     ) -> Bool {
+        var need = 0
         var ok = 0
-        if yPrev > lo, yNext > lo,
-           sameArrRow(prev: prev, next: next, prevY: yPrev - 1, nextY: yNext - 1, stepX: stepX) {
-            ok += 1
+        if yPrev > lo, yNext > lo {
+            need += 1
+            if sameArrRow(prev: prev, next: next, prevY: yPrev - 1, nextY: yNext - 1, stepX: stepX) {
+                ok += 1
+            }
         }
-        if yPrev + 1 < hi, yNext + 1 < hi,
-           sameArrRow(prev: prev, next: next, prevY: yPrev + 1, nextY: yNext + 1, stepX: stepX) {
-            ok += 1
+        if yPrev + 1 < hi, yNext + 1 < hi {
+            need += 1
+            if sameArrRow(prev: prev, next: next, prevY: yPrev + 1, nextY: yNext + 1, stepX: stepX) {
+                ok += 1
+            }
         }
-        // 两侧都能过更好；至少一侧（对齐 iShot 二次 sameArr）
-        return ok >= 1
+        // 能校验的邻行必须全部通过（两侧都在时更严，抑制文字行周期早匹配）
+        return need > 0 && ok == need
     }
 
     private static func countEdgeSameRows(
@@ -1382,6 +1510,7 @@ public enum ScrollStitcher {
             space: cs,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
+        // 直接 draw：在当前系统位图布局下内存行0已是图像顶（与 cropping / 既有测试一致）
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
         var pixels = [UInt8](repeating: 0, count: w * h)
         for i in 0..<(w * h) {
