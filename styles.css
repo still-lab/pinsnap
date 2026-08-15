@@ -1086,19 +1086,34 @@ kbd {
   margin-bottom: 0 !important;
 }
 
-.gh-link {
+.star-cta {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  margin-top: 18px;
-  font-size: 13px;
-  color: var(--ink-soft);
+  justify-content: center;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 11px 24px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--brand-strong);
+  border-radius: 10px;
   text-decoration: none;
-  border-bottom: 1px dashed transparent;
-  transition: color .15s ease, border-color .15s ease;
+  box-shadow: 0 4px 14px rgba(0,0,0,.12);
+  transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
 }
-.gh-link svg { flex-shrink: 0; }
-.gh-link:hover { color: var(--brand-strong); border-bottom-color: var(--brand-strong); }
+.star-cta svg { flex-shrink: 0; }
+.star-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(0,0,0,.18);
+  background: var(--brand-strong);
+  filter: brightness(1.05);
+}
+.star-badge {
+  display: block;
+  margin: 14px auto 0;
+  vertical-align: middle;
+}
 
 .footer-gh {
   color: var(--ink-soft);
