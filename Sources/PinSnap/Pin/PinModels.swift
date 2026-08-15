@@ -78,7 +78,7 @@ public enum PinStoreError: Error, LocalizedError, Sendable {
 public protocol PinStoreProtocol: AnyObject {
     var pins: [PinItem] { get }
     var freeLimit: Int { get }
-    func create(image: CGImage, at frame: CGRect?) throws -> PinItem
+    func create(image: CGImage, at frame: CGRect?) async throws -> PinItem
     func close(id: UUID) throws
     func destroy(id: UUID) throws
     func hideAll()
@@ -86,6 +86,7 @@ public protocol PinStoreProtocol: AnyObject {
     func toggleVisibility()
     func setClickThrough(id: UUID, enabled: Bool) throws
     func clearAllClickThrough()
+    func restoreFromClosedIfNeeded() async
     func restoreSession() async throws
     func persistSession() async throws
 }
@@ -111,15 +112,18 @@ public final class PinStore: PinStoreProtocol {
         try? FileManager.default.createDirectory(at: self.sessionDir, withIntermediateDirectories: true)
     }
 
-    public func create(image: CGImage, at frame: CGRect? = nil) throws -> PinItem {
+    public func create(image: CGImage, at frame: CGRect? = nil) async throws -> PinItem {
         let unlimited = gate.isEnabled(.pinUnlimited)
-        if !unlimited, pins.filter({ !$0.isHidden }).count >= freeLimit {
+        if !unlimited, pins.count >= freeLimit {
             throw PinStoreError.freeLimitReached(limit: freeLimit)
         }
         let id = UUID()
         let file = "\(id.uuidString).png"
         let url = sessionDir.appendingPathComponent(file)
-        try ImageExporter().save(image, to: url, format: .png)
+        // PNG 编码 + 写盘移出主线程；面板创建仍在主线程（AppKit）。
+        try await Task.detached(priority: .userInitiated) {
+            try ImageExporter().save(image, to: url, format: .png)
+        }.value
 
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         let logicalSize: NSSize
@@ -208,13 +212,13 @@ public final class PinStore: PinStoreProtocol {
         }
     }
 
-    public func restoreFromClosedIfNeeded() {
+    public func restoreFromClosedIfNeeded() async {
         guard let item = closedStack.popLast() else { return }
         let url = sessionDir.appendingPathComponent(item.imageFileName)
         guard let data = try? Data(contentsOf: url),
               let img = NSImage(data: data)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
         else { return }
-        _ = try? create(image: img, at: item.frame)
+        _ = try? await create(image: img, at: item.frame)
     }
 
     /// v1.0 不做会话恢复：启动不读盘。

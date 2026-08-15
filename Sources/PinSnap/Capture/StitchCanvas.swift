@@ -174,5 +174,5 @@ public final class StitchCanvas: @unchecked Sendable {
 
     // MARK: - Constants
 
-    public static let maxOutputHeight = 65_536
+    public static let maxOutputHeight = ScrollStitcher.maxOutputHeight
 }

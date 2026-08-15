@@ -249,15 +249,23 @@ private struct SaveSettingsPage: View {
 }
 
 private struct AboutSettingsPage: View {
+    /// 上架前接真实 URL（B-009/B-010）；为空则隐藏入口，避免占位死链。
+    private static let privacyURL: URL? = nil
+    private static let termsURL: URL? = nil
+
     var body: some View {
         Form {
             Section {
                 LabeledContent("版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
                     .padding(.vertical, 6)
-                Link("隐私政策", destination: URL(string: "https://example.com/pinsnap/privacy")!)
-                    .padding(.vertical, 4)
-                Link("使用条款", destination: URL(string: "https://example.com/pinsnap/terms")!)
-                    .padding(.vertical, 4)
+                if let url = Self.privacyURL {
+                    Link("隐私政策", destination: url)
+                        .padding(.vertical, 4)
+                }
+                if let url = Self.termsURL {
+                    Link("使用条款", destination: url)
+                        .padding(.vertical, 4)
+                }
             }
         }
         .formStyle(.grouped)

@@ -21,15 +21,15 @@ public final class HotKeyCenter {
     private var hotKeys: [EventHotKeyRef?] = []
     private var handler: EventHandlerRef?
     private var pendingCaptureWorkItem: DispatchWorkItem?
-    private static weak var shared: HotKeyCenter?
 
     public init() {}
 
     public func register() throws {
         cancelPendingCapture()
-        HotKeyCenter.shared = self
+        // 用 userData 携带实例，替代 static weak shared 全局状态（多实例/测试更安全）。
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        let handler: EventHandlerUPP = { (_, event, _) -> OSStatus in
+        let handler: EventHandlerUPP = { (_, event, userData) -> OSStatus in
             var hk = EventHotKeyID()
             GetEventParameter(
                 event,
@@ -40,12 +40,14 @@ public final class HotKeyCenter {
                 nil,
                 &hk
             )
+            guard let userData else { return noErr }
+            let center = Unmanaged<HotKeyCenter>.fromOpaque(userData).takeUnretainedValue()
             Task { @MainActor in
-                HotKeyCenter.shared?.handleRegistered(id: hk.id)
+                center.handleRegistered(id: hk.id)
             }
             return noErr
         }
-        InstallEventHandler(GetApplicationEventTarget(), handler, 1, &eventType, nil, &self.handler)
+        InstallEventHandler(GetApplicationEventTarget(), handler, 1, &eventType, selfPtr, &self.handler)
 
         let prefs = HotKeyPreferences.shared
         let conflicts = prefs.conflictedSlots()

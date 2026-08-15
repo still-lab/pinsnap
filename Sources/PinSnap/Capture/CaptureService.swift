@@ -60,8 +60,9 @@ public struct CaptureService: CaptureServiceProtocol {
                     image: image
                 ))
             } catch {
-                PinSnapLog.capture.error("captureDisplay failed: \(error.localizedDescription)")
-                throw error
+                // 单屏截帧失败不拖垮整次截图：跳过该屏，继续采集其它屏。
+                PinSnapLog.capture.error("captureDisplay failed for screen \(screen.id.rawValue): \(error.localizedDescription)")
+                continue
             }
         }
 

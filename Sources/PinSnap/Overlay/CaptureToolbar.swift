@@ -133,7 +133,9 @@ final class CaptureToolbar: NSPanel {
         eyedropperButton = actionBtn("eyedropper", tip: "取色", #selector(eyedropperAction))
         eyedropperButton.setButtonType(.toggle)
         row1.addArrangedSubview(eyedropperButton)
-        row1.addArrangedSubview(actionBtn("doc.text.magnifyingglass", tip: "OCR", #selector(ocrAction)))
+        if FeatureGate.shared.isEnabled(.ocr) {
+            row1.addArrangedSubview(actionBtn("doc.text.magnifyingglass", tip: "OCR", #selector(ocrAction)))
+        }
         row1.addArrangedSubview(actionBtn("arrow.up.arrow.down", tip: "上下长截", #selector(scrollCaptureAction)))
         row1.addArrangedSubview(actionBtn("pin", tip: "贴图", #selector(pinAction)))
         row1.addArrangedSubview(actionBtn("square.and.arrow.down", tip: "保存", #selector(saveAction)))

@@ -186,7 +186,9 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let prefs = HotKeyPreferences.shared
         menu.addItem(actionItem("截图", #selector(capture), shortcut: prefs.displayString(for: .capture)))
-        menu.addItem(actionItem("延时截图", #selector(captureDelayed), shortcut: prefs.displayString(for: .delayedCapture)))
+        let delayed = actionItem("延时截图", #selector(captureDelayed), shortcut: prefs.displayString(for: .delayedCapture))
+        delayed.isEnabled = FeatureGate.shared.isEnabled(.delayCapture)
+        menu.addItem(delayed)
         let lastRegion = actionItem("上次区域", #selector(captureLastRegion), shortcut: prefs.lastRegionDisplayString)
         lastRegion.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
         menu.addItem(lastRegion)
@@ -196,6 +198,7 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         menu.addItem(actionItem("贴图", #selector(paste), shortcut: prefs.displayString(for: .paste)))
+        menu.addItem(actionItem("恢复最近关闭", #selector(restoreLastClosedPin)))
         menu.addItem(actionItem("隐藏贴图", #selector(hidePins), shortcut: prefs.displayString(for: .hidePins)))
         menu.addItem(actionItem("显示贴图", #selector(showPins), shortcut: prefs.displayString(for: .showPins)))
         menu.addItem(.separator())
@@ -226,6 +229,7 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 item.attributedTitle = Self.menuLabeledTitle("截图", shortcut: prefs.displayString(for: .capture))
             case #selector(captureDelayed):
                 item.attributedTitle = Self.menuLabeledTitle("延时截图", shortcut: prefs.displayString(for: .delayedCapture))
+                item.isEnabled = FeatureGate.shared.isEnabled(.delayCapture)
             case #selector(captureLastRegion):
                 item.attributedTitle = Self.menuLabeledTitle("上次区域", shortcut: prefs.lastRegionDisplayString)
                 item.isEnabled = AppBootstrap.shared.coordinator.hasLastSelection
@@ -326,8 +330,8 @@ final class PinSnapApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AppBootstrap.shared.coordinator.beginPasteFromClipboard()
     }
 
-    @objc private func togglePins() {
-        AppBootstrap.shared.coordinator.togglePinVisibility()
+    @objc private func restoreLastClosedPin() {
+        AppBootstrap.shared.coordinator.restoreLastClosedPin()
     }
 
     @objc private func hidePins() {

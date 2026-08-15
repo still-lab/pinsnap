@@ -71,6 +71,7 @@ public final class SessionCoordinator {
     /// REQ: C-11 — 固定延时后进入普通截图；菜单栏逐秒倒计时。
     public func beginDelayedCapture(autoCopy: Bool = false, autoSave: Bool = false) {
         cancelDelay()
+        guard gate.isEnabled(.delayCapture) else { return }
         guard state == .idle || state == .preparing else { return }
         state = .preparing
         let total = Int(Self.delayCaptureSeconds)
@@ -116,6 +117,7 @@ public final class SessionCoordinator {
                 didOpenScreenSettingsThisProcess = true
             }
             state = .idle
+            Toast.shared.show("需要屏幕录制权限")
             return
         }
 
@@ -162,7 +164,17 @@ public final class SessionCoordinator {
             case .image(let i), .textRendered(let i), .colorCard(let i, _):
                 image = i
             }
-            _ = try pins.create(image: image, at: nil)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    _ = try await self.pins.create(image: image, at: nil)
+                } catch let error as PinStoreError {
+                    if case .freeLimitReached = error { self.onFreeLimit?() }
+                    else { PinSnapLog.pin.error("paste: \(error.localizedDescription)") }
+                } catch {
+                    PinSnapLog.pin.error("paste: \(error.localizedDescription)")
+                }
+            }
         } catch let error as PinStoreError {
             if case .freeLimitReached = error {
                 onFreeLimit?()
@@ -183,6 +195,14 @@ public final class SessionCoordinator {
 
     public func showAllPins() {
         pins.showAll()
+    }
+
+    /// 从关闭栈恢复最近一张贴图（Snipaste 语义）。REQ: PIN_LIFECYCLE
+    public func restoreLastClosedPin() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.pins.restoreFromClosedIfNeeded()
+        }
     }
 
     private func cancelDelay() {
@@ -206,13 +226,16 @@ public final class SessionCoordinator {
             lastSelection = selection
         case .pinned(let image, let frame, let selection):
             lastSelection = selection
-            do {
-                _ = try pins.create(image: image, at: frame)
-            } catch let error as PinStoreError {
-                if case .freeLimitReached = error { onFreeLimit?() }
-                else { PinSnapLog.pin.error("\(error.localizedDescription)") }
-            } catch {
-                PinSnapLog.pin.error("\(error.localizedDescription)")
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    _ = try await self.pins.create(image: image, at: frame)
+                } catch let error as PinStoreError {
+                    if case .freeLimitReached = error { self.onFreeLimit?() }
+                    else { PinSnapLog.pin.error("\(error.localizedDescription)") }
+                } catch {
+                    PinSnapLog.pin.error("\(error.localizedDescription)")
+                }
             }
         }
         state = .idle

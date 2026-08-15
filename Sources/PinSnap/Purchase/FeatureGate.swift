@@ -22,19 +22,22 @@ public protocol FeatureGateProtocol: AnyObject {
 public final class FeatureGate: FeatureGateProtocol {
     public static let shared = FeatureGate()
 
+    /// 开发期全开：DEBUG 默认 true（现阶段全免费，便于本地验证）；Release 恒 false。
+    /// Pro 能力是否解锁由 `isPro || debugForcePro` 决定。
     #if DEBUG
-    public var debugForcePro = false
+    public var debugForcePro = true
     #else
-    public var debugForcePro = false
+    public let debugForcePro = false
     #endif
 
     public private(set) var isPro = false
 
     private init() {}
 
+    /// 真门控：Pro 授权或 debugForcePro 解锁全部 Pro 能力；Free 不享任何 Pro 能力。
+    /// 核心能力（截图/基础标注/复制/保存/≤3 贴图/粘贴）不经 FeatureGate，始终可用。
     public func isEnabled(_ feature: Feature) -> Bool {
-        // 现阶段全免费；付费门控后期再梳
-        true
+        isPro || debugForcePro
     }
 
     public func applyEntitlement(isPro: Bool) {
