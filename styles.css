@@ -172,6 +172,31 @@ a { color: inherit; text-decoration: none; }
 .nav-links a:hover { color: var(--brand-strong); }
 
 .nav-cta { margin-left: 4px; padding: 9px 20px; font-size: 14px; }
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.nav-gh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  text-decoration: none;
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.nav-gh-btn svg { flex-shrink: 0; }
+.nav-gh-btn:hover {
+  color: var(--brand-strong);
+  border-color: var(--brand);
+  background: var(--surface);
+}
 
 /* ---------- Hero ---------- */
 
@@ -1086,34 +1111,22 @@ kbd {
   margin-bottom: 0 !important;
 }
 
-.star-cta {
-  display: inline-flex;
+.dl-actions {
+  display: flex;
   align-items: center;
   justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.dl-gh-btn {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
-  margin-top: 20px;
-  padding: 11px 24px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #fff;
-  background: var(--brand-strong);
-  border-radius: 10px;
+  font-size: 17px;
+  padding: 16px 30px;
   text-decoration: none;
-  box-shadow: 0 4px 14px rgba(0,0,0,.12);
-  transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
 }
-.star-cta svg { flex-shrink: 0; }
-.star-cta:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(0,0,0,.18);
-  background: var(--brand-strong);
-  filter: brightness(1.05);
-}
-.star-badge {
-  display: block;
-  margin: 14px auto 0;
-  vertical-align: middle;
-}
+.dl-gh-btn svg { flex-shrink: 0; }
 
 .footer-gh {
   color: var(--ink-soft);
