@@ -56,6 +56,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           VER="${{ steps.version.outputs.ver }}"
           DMG="dist/PinSnap-${VER}-trial.dmg"
           if [ ! -f "$DMG" ]; then
@@ -66,15 +67,18 @@ jobs:
           # 上传两个 asset：
           #   1. 固定名 PinSnap-trial.dmg —— 落地页按钮指向它，永远指向最新版
           #   2. 带版本名 PinSnap-<VER>-trial.dmg —— 便于按版本下载
-          # 创建（或更新）tag 对应的 Release 并上传 DMG
-          NOTES="- 下载: https://github.com/still-lab/pinsnap/releases/latest/download/PinSnap-trial.dmg | macOS 13.0+ · Universal"
-          gh release create "v${VER}" \
-            "$DMG#PinSnap-trial.dmg" \
-            "$DMG" \
-            --title "PinSnap v${VER}" \
-            --notes "$NOTES" \
-            --generate-notes || true
-          # 若 release 已存在则补传资产
-          gh release upload "v${VER}" "$DMG#PinSnap-trial.dmg" --clobber || true
-          gh release upload "v${VER}" "$DMG" --clobber || true
+          # 固定名版本用复制文件的方式上传（gh 的 #重命名 语法在多 asset 下不可靠）
+          FIXED="dist/PinSnap-trial.dmg"
+          cp "$DMG" "$FIXED"
+
+          if gh release view "v${VER}" >/dev/null 2>&1; then
+            echo "Release v${VER} already exists, uploading assets..."
+            gh release upload "v${VER}" "$FIXED" "$DMG" --clobber
+          else
+            NOTES="- 下载: https://github.com/still-lab/pinsnap/releases/latest/download/PinSnap-trial.dmg | macOS 13.0+ · Universal"
+            gh release create "v${VER}" \
+              "$FIXED" "$DMG" \
+              --title "PinSnap v${VER}" \
+              --notes "$NOTES"
+          fi
           echo "Release URL: https://github.com/still-lab/pinsnap/releases/tag/v${VER}"
