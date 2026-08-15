@@ -66,14 +66,12 @@ jobs:
           #   1. 固定名 PinSnap-trial.dmg —— 落地页按钮指向它，永远指向最新版
           #   2. 带版本名 PinSnap-<VER>-trial.dmg —— 便于按版本下载
           # 创建（或更新）tag 对应的 Release 并上传 DMG
+          NOTES="- 下载: https://github.com/still-lab/pinsnap/releases/latest/download/PinSnap-trial.dmg | macOS 13.0+ · Universal"
           gh release create "v${VER}" \
             "$DMG#PinSnap-trial.dmg" \
             "$DMG" \
             --title "PinSnap v${VER}" \
-            --notes "自动构建发布 (GitHub Actions)
-
-- 下载: https://github.com/still-lab/pinsnap/releases/latest/download/PinSnap-trial.dmg
-- macOS 13.0+ · Universal" \
+            --notes "$NOTES" \
             --generate-notes || true
           # 若 release 已存在则补传资产
           gh release upload "v${VER}" "$DMG#PinSnap-trial.dmg" --clobber || true
