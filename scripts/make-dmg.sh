@@ -21,6 +21,8 @@ DMG_NAME="${DMG_NAME:-PinSnap-${VERSION}-trial.dmg}"
 VOL_NAME="${VOL_NAME:-PinSnap}"
 BG_SRC="${BG_SRC:-$ROOT/Resources/dmg/background.png}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
+# ad-hoc signing: used on CI where no Developer ID / local cert exists
+AD_HOC="${AD_HOC:-0}"
 
 # Window in Finder points; background.png is 2× pixels @ 144 DPI
 WIN_X=200
@@ -52,9 +54,16 @@ find_built_app() {
 }
 
 if [[ "$SKIP_BUILD" != "1" ]]; then
-  if ! security find-identity -v -p codesigning | grep -q "\"$IDENTITY\""; then
-    echo "error: no valid codesigning identity named \"$IDENTITY\"." >&2
-    exit 1
+  if [[ "$AD_HOC" != "1" ]]; then
+    if ! security find-identity -v -p codesigning | grep -q "\"$IDENTITY\""; then
+      echo "error: no valid codesigning identity named \"$IDENTITY\"." >&2
+      echo "Import /tmp/pinsnap-local.p12 and trust the cert for Code Signing (Keychain Access → trust)." >&2
+      echo "On CI (no cert), set AD_HOC=1 to build with ad-hoc signing." >&2
+      exit 1
+    fi
+  else
+    echo "ad-hoc mode: skipping codesign identity check"
+    IDENTITY="-"
   fi
 
   xcodegen generate

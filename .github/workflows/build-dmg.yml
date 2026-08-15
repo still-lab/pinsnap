@@ -1,0 +1,81 @@
+name: Build & Release DMG
+
+on:
+  # 手动触发（Actions 页面 → Run workflow → 输入版本号）
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号，例如 1.1.0（留空则用 project.yml 中的 MARKETING_VERSION）'
+        required: false
+        default: ''
+  # 推送 v 开头的 tag 时自动触发，例如: git tag v1.1.0 && git push origin v1.1.0
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build DMG & Publish Release
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VER="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF_NAME#v}"
+          else
+            VER="$(grep -m1 'MARKETING_VERSION' project.yml | awk '{print $2}' | tr -d '"')"
+          fi
+          echo "VER=$VER" >> "$GITHUB_OUTPUT"
+          echo "Version: $VER"
+
+      - name: Install toolchain
+        run: |
+          brew install xcodegen create-dmg
+
+      - name: Build app & pack DMG (ad-hoc signed)
+        env:
+          VERSION: ${{ steps.version.outputs.ver }}
+          AD_HOC: "1"
+          OUT_DIR: "${{ github.workspace }}/dist"
+        run: |
+          ./scripts/make-dmg.sh
+          ls -lh dist/
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="${{ steps.version.outputs.ver }}"
+          DMG="dist/PinSnap-${VER}-trial.dmg"
+          if [ ! -f "$DMG" ]; then
+            echo "error: $DMG not found" >&2
+            ls dist/
+            exit 1
+          fi
+          # 上传两个 asset：
+          #   1. 固定名 PinSnap-trial.dmg —— 落地页按钮指向它，永远指向最新版
+          #   2. 带版本名 PinSnap-<VER>-trial.dmg —— 便于按版本下载
+          # 创建（或更新）tag 对应的 Release 并上传 DMG
+          gh release create "v${VER}" \
+            "$DMG#PinSnap-trial.dmg" \
+            "$DMG" \
+            --title "PinSnap v${VER}" \
+            --notes "自动构建发布 (GitHub Actions)
+
+- 下载: https://github.com/still-lab/pinsnap/releases/latest/download/PinSnap-trial.dmg
+- macOS 13.0+ · Universal" \
+            --generate-notes || true
+          # 若 release 已存在则补传资产
+          gh release upload "v${VER}" "$DMG#PinSnap-trial.dmg" --clobber || true
+          gh release upload "v${VER}" "$DMG" --clobber || true
+          echo "Release URL: https://github.com/still-lab/pinsnap/releases/tag/v${VER}"
