@@ -179,7 +179,7 @@ a { color: inherit; text-decoration: none; }
 }
 .nav-gh-btn {
   gap: 6px;
-  padding: 9px 18px;
+  padding: 9px 20px;
   font-size: 14px;
 }
 .nav-gh-btn svg { flex-shrink: 0; }
