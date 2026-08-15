@@ -1086,6 +1086,28 @@ kbd {
   margin-bottom: 0 !important;
 }
 
+.gh-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 18px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+  transition: color .15s ease, border-color .15s ease;
+}
+.gh-link svg { flex-shrink: 0; }
+.gh-link:hover { color: var(--brand-strong); border-bottom-color: var(--brand-strong); }
+
+.footer-gh {
+  color: var(--ink-soft);
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+  transition: color .15s ease, border-bottom-color .15s ease;
+}
+.footer-gh:hover { color: var(--brand-strong); border-bottom-color: var(--brand-strong); }
+
 /* ---------- Footer ---------- */
 
 .footer {
