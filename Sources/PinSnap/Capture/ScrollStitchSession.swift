@@ -172,7 +172,7 @@ public final class ScrollStitchSession: @unchecked Sendable {
         return nil
     }
 
-    /// 首帧整幅；后续只贴底部 advance 新条带，硬接无羽化（alpha 叠层会把对准误差放大成重影）。
+    /// 首帧整幅；后续贴「advance + 10px 重叠」条带（iShot 接缝 10），顶边压进上一帧 10px 渐变。
     private func drawScrollView(maxHeight: Int) -> CGImage? {
         guard let first = frames.first else { return nil }
         let w = first.width
@@ -185,22 +185,24 @@ public final class ScrollStitchSession: @unchecked Sendable {
             bitsPerComponent: 8, bytesPerRow: 0, space: cs,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
-        ctx.interpolationQuality = .none
 
+        let blend = 10 // iShot `fmov d13, #10.0`
         let firstH = min(first.height, totalH)
         if firstH > 0,
            let piece = first.height == firstH
             ? first
             : first.cropping(to: CGRect(x: 0, y: 0, width: w, height: firstH).integral) {
+            ctx.setAlpha(1)
             ctx.draw(piece, in: CGRect(x: 0, y: totalH - firstH, width: w, height: firstH))
         }
 
         for idx in 1..<frames.count {
             let adv = offsets[idx] - offsets[idx - 1]
             guard adv > 0 else { continue }
-            let yTop = first.height + offsets[idx - 1]
+            let yTop = max(0, first.height + offsets[idx - 1] - blend)
             guard yTop < totalH else { break }
-            guard let strip = ScrollStitcher.contentStrip(frame: frames[idx], advance: adv)
+            let stripH = min(adv + blend, frames[idx].height)
+            guard let strip = ScrollStitcher.contentStrip(frame: frames[idx], advance: stripH)
             else { continue }
             let drawH = min(strip.height, totalH - yTop)
             guard drawH > 0,
@@ -208,9 +210,30 @@ public final class ScrollStitchSession: @unchecked Sendable {
                     ? strip
                     : strip.cropping(to: CGRect(x: 0, y: 0, width: w, height: drawH).integral)
             else { continue }
-            let cgY = totalH - yTop - drawH
-            ctx.draw(piece, in: CGRect(x: 0, y: cgY, width: w, height: drawH))
+
+            let seam = min(blend, drawH)
+            if seam > 0,
+               let topBand = piece.cropping(to: CGRect(x: 0, y: 0, width: w, height: seam).integral) {
+                for row in 0..<seam {
+                    guard let line = topBand.cropping(
+                        to: CGRect(x: 0, y: row, width: w, height: 1).integral
+                    ) else { continue }
+                    let t = Double(row) / Double(max(seam - 1, 1))
+                    let cgY = totalH - yTop - row - 1
+                    ctx.setAlpha(CGFloat(t))
+                    ctx.draw(line, in: CGRect(x: 0, y: cgY, width: w, height: 1))
+                }
+            }
+            if drawH > seam,
+               let rest = piece.cropping(
+                to: CGRect(x: 0, y: seam, width: w, height: drawH - seam).integral
+               ) {
+                let cgY = totalH - yTop - drawH
+                ctx.setAlpha(1)
+                ctx.draw(rest, in: CGRect(x: 0, y: cgY, width: w, height: drawH - seam))
+            }
         }
+        ctx.setAlpha(1)
         return ctx.makeImage()
     }
 
