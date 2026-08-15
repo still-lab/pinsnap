@@ -1,6 +1,13 @@
 # PinSnap
 
-菜单栏常驻的 macOS **截图 + 贴图**工具。对标 Snipaste 贴图深度，按 iShot 能力树分期扩展。目标上架 Mac App Store。
+> 菜单栏常驻的 macOS **截图 + 贴图**工具 · 对标 Snipaste 贴图深度 · 目标上架 Mac App Store
+
+![macOS](https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white)
+![Swift](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Status](https://img.shields.io/badge/M0%E2%80%93M2%20%E5%AE%8C%E6%88%90-M3%20%E8%BF%9B%E8%A1%8C%E4%B8%AD-blue)
+
+一次截图，随取随贴。轻量常驻菜单栏，截图 → 标注 → 贴图一条龙，剪贴板里的图、文本、色卡也能一键贴成可置顶的小窗。
 
 | 项 | 值 |
 |---|---|
@@ -8,9 +15,51 @@
 | 最低系统 | macOS 13.0 |
 | 语言 | Swift · AppKit（截图/贴图）+ SwiftUI（设置） |
 | 分发 | 仅 Mac App Store |
-| 默认热键 | F1 截图 · ⌘T 延时 · F1×2 上次区域 · F3 贴图 · ⌘H 隐藏 · ⌘⇧H 显示 |
+| 授权 | [MIT](LICENSE) |
 
-## 文档索引
+## ✨ 功能特性
+
+### 截图
+- 区域截图、**窗口级吸附**（自动识别光标下窗口）
+- **延时截图**（⌘T，固定 5s，菜单栏倒计时）
+- **上次区域**（F1 连击 / 菜单，智能回落普通截图）
+- 多屏混合缩放无错位（ScreenGeometry）
+
+### 标注
+- 矩形 / 椭圆 / 直线 / 箭头 / 手绘 / 文本 / 马赛克 / 模糊
+- 记号笔 / 橡皮 / 撤销重做
+- 选区方向键微调（←↑↓→，Shift 步进 10）、放大镜、取色（HEX/RGB 双格式）
+
+### 贴图
+- 置顶、拖动、**滚轮缩放**、空格滚轮调透明度
+- 截图 → 贴图、剪贴板图片/文本/**色卡** → 贴图
+- 贴图上右键标注，写回成图
+- 关闭进栈（容量 5）、菜单「恢复最近关闭」
+
+### 效率
+- 全局热键（见下表）
+- 快捷保存 ⌘S、⌘⇧S 另存；PNG/JPEG、存储目录书签、文件名模板
+- OCR（Vision 文本 + 条码，v1.1 已落地）
+
+## ⌨️ 默认热键
+
+| 按键 | 动作 |
+|---|---|
+| `F1` | 截图 |
+| `F1 ×2` | 上次区域 |
+| `⌘T` | 延时截图（5s） |
+| `F3` | 剪贴板贴图 |
+| `⌘H` | 隐藏全部贴图 |
+| `⌘⇧H` | 显示全部贴图 |
+
+## 💰 商业模型（已锁定）
+
+| 版本 | 权益 |
+|---|---|
+| **Free** | 同时最多 3 张贴图，无水印 |
+| **Pro** | ¥8/月 · ¥48/年 · ¥98 终身 |
+
+## 🧭 文档索引
 
 | 文档 | 说明 |
 |---|---|
@@ -28,7 +77,7 @@
 | [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) | 实施完成度与运行方式 |
 | [docs/CONNECT_SETUP.md](docs/CONNECT_SETUP.md) | App Store Connect 前置清单 |
 
-## 源码规划布局
+## 🏗️ 源码规划布局
 
 ```
 Sources/PinSnap/
@@ -40,6 +89,7 @@ Sources/PinSnap/
   Export/        # 存盘、文件名模板
   Purchase/      # StoreKit 2、FeatureGate
   Settings/      # SwiftUI 设置
+  Vision/        # OCR（文本 + 条码）
   Support/       # 日志、Toast、通用工具
 Tests/PinSnapTests/
 docs/
@@ -47,12 +97,7 @@ docs/
 
 可运行 macOS App（`xcodegen` / `xcodebuild`）。**M0–M2 完成，M3 进行中**；进度见 [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)。
 
-## 商业（已锁定）
-
-- Free：同时最多 3 张贴图，无水印
-- Pro：¥8/月 · ¥48/年 · ¥98 终身
-
-## 本地开发
+## 🚀 本地开发
 
 ```bash
 # 生成并打开 Xcode 工程（需 Homebrew: xcodegen）
@@ -66,8 +111,17 @@ xcodebuild -scheme PinSnap -configuration Debug -derivedDataPath build/DerivedDa
 swift test
 ```
 
-实施进度见 [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)。
+## 📅 版本规划
 
-## License
+| 版本 | 状态 | 内容 |
+|---|---|---|
+| M0–M2 | ✅ 完成 | 骨架、截图、标注 + 基础贴图 |
+| M3 | 🔄 进行中 | 贴图深度（生命周期/剪贴板桥）、Pro 能力 |
+| M4 | ⏳ 未就绪 | 本地化 / Connect / TestFlight（需账号侧） |
+| v1.1 | ✅ 代码落地 | OCR（Vision 文本 + 条码） |
+| v1.2 | 🦴 骨架 | AccessibilitySnap、文件名模板扩展 |
+| v1.3+ | 🔄 进行中 | 长截图拼接（ScrollStitcher）、录屏 |
 
-专有软件，版权归项目所有者。未开源。
+## 📄 License
+
+[MIT](LICENSE) © 2026 会会
