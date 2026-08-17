@@ -15,6 +15,7 @@
 | 最低系统 | macOS 13.0 |
 | 语言 | Swift · AppKit（截图/贴图）+ SwiftUI（设置） |
 | 分发 | 仅 Mac App Store |
+| 官网 | [still-lab.github.io/pinsnap](https://still-lab.github.io/pinsnap/) |
 | 授权 | [MIT](LICENSE) |
 
 ## ✨ 功能特性
