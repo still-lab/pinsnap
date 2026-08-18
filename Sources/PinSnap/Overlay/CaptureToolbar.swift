@@ -8,17 +8,20 @@ protocol CaptureToolbarDelegate: AnyObject {
     func toolbarSelectArrowStyle(_ style: CaptureArrowStyle)
     func toolbarSelectMosaicStyle(_ style: CaptureMosaicStyle)
     func toolbarSelectPenStyle(_ style: CapturePenStyle)
+    func toolbarSelectStrokeHue(_ hue: CGFloat)
     func toolbarToggleEyedropper()
     func toolbarUndo()
     func toolbarRedo()
     func toolbarOCR()
+    func toolbarTranslate()
     func toolbarScrollCapture()
     func toolbarCopy()
     func toolbarSave()
     func toolbarPin()
 }
 
-/// 两层工具条：点「形状」「箭头」「马赛克」展开第二层子项。宽度固定，避免子栏撑开。
+/// 两层工具条：点「形状」「箭头」「马赛克」展开第二层子项。
+/// 主栏定宽；子栏内容变宽时整条向右加宽，色条始终紧贴左侧子项。
 @MainActor
 final class CaptureToolbar: NSPanel {
     weak var actionHandler: CaptureToolbarDelegate?
@@ -27,7 +30,7 @@ final class CaptureToolbar: NSPanel {
     private let rowHeight: CGFloat = 34
     private let sidePad: CGFloat = 6
     private let gap: CGFloat = 4
-    private let barWidth: CGFloat = 418
+    private let baseWidth: CGFloat = 448
     private let subRowExtra: CGFloat = 28
     private let dividerHeight: CGFloat = 1
     /// 工具条与选区之间的间距
@@ -58,6 +61,9 @@ final class CaptureToolbar: NSPanel {
     private var eraserModeButton: NSButton!
     private var mosaicModeButton: NSButton!
     private var blurModeButton: NSButton!
+    private let colorCluster = NSStackView()
+    private var colorSep: NSView!
+    private let colorStrip = StrokeColorStrip()
     private var eyedropperButton: NSButton!
     private var rowDivider: NSView!
     private var pendingFramePreserveTop: Bool?
@@ -65,7 +71,7 @@ final class CaptureToolbar: NSPanel {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: barWidth, height: rowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: baseWidth, height: rowHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -79,7 +85,7 @@ final class CaptureToolbar: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         // contentView 跟窗口 frame 走 autoresizing，避免 width 约束 + setFrame 互相递归 layout
-        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: barWidth, height: rowHeight))
+        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: baseWidth, height: rowHeight))
         chrome.material = .popover
         chrome.blendingMode = .withinWindow
         chrome.state = .active
@@ -112,7 +118,9 @@ final class CaptureToolbar: NSPanel {
         row2.edgeInsets = NSEdgeInsets(top: 3, left: sidePad, bottom: 3, right: sidePad)
         row2.isHidden = true
         row2.translatesAutoresizingMaskIntoConstraints = false
-        row2.setHuggingPriority(.defaultHigh, for: .horizontal)
+        row2.detachesHiddenViews = true
+        row2.setHuggingPriority(.required, for: .horizontal)
+        row2.setClippingResistancePriority(.required, for: .horizontal)
 
         // 第一层
         let shapeBtn = iconBtn("rectangle.on.rectangle", tip: "形状", tag: CaptureAnnotateTool.shape.rawValue)
@@ -135,6 +143,12 @@ final class CaptureToolbar: NSPanel {
         row1.addArrangedSubview(eyedropperButton)
         if FeatureGate.shared.isEnabled(.ocr) {
             row1.addArrangedSubview(actionBtn("doc.text.magnifyingglass", tip: "OCR", #selector(ocrAction)))
+        }
+        if FeatureGate.shared.isEnabled(.translate) {
+            let translateBtn = glyphBtn("译", tip: "翻译", tag: -2)
+            translateBtn.setButtonType(.momentaryLight)
+            translateBtn.action = #selector(translateAction)
+            row1.addArrangedSubview(translateBtn)
         }
         row1.addArrangedSubview(actionBtn("arrow.up.arrow.down", tip: "上下长截", #selector(scrollCaptureAction)))
         row1.addArrangedSubview(actionBtn("pin", tip: "贴图", #selector(pinAction)))
@@ -176,14 +190,25 @@ final class CaptureToolbar: NSPanel {
         mosaicSubStack.addArrangedSubview(mosaicModeButton)
         mosaicSubStack.addArrangedSubview(blurModeButton)
 
-        row2.addArrangedSubview(shapeSubStack)
-        row2.addArrangedSubview(arrowSubStack)
-        row2.addArrangedSubview(penSubStack)
-        row2.addArrangedSubview(mosaicSubStack)
+        row2.addView(shapeSubStack, in: .leading)
+        row2.addView(arrowSubStack, in: .leading)
+        row2.addView(penSubStack, in: .leading)
+        row2.addView(mosaicSubStack, in: .leading)
+        configureSubStack(colorCluster)
+        colorSep = sep()
+        colorCluster.addArrangedSubview(colorSep)
+        colorStrip.onHueChange = { [weak self] hue in
+            self?.actionHandler?.toolbarSelectStrokeHue(hue)
+        }
+        colorCluster.addArrangedSubview(colorStrip)
+        colorCluster.setHuggingPriority(.required, for: .horizontal)
+        row2.addView(colorCluster, in: .leading)
         shapeSubStack.isHidden = true
         arrowSubStack.isHidden = true
         penSubStack.isHidden = true
         mosaicSubStack.isHidden = true
+        colorSep.isHidden = true
+        colorCluster.isHidden = true
         row2.isHidden = true
 
         rowDivider = NSView()
@@ -209,9 +234,17 @@ final class CaptureToolbar: NSPanel {
         refreshSelectionUI(resizeWindow: false)
     }
 
-    var width: CGFloat { barWidth }
+    var width: CGFloat { fittedBarWidth() }
     var height: CGFloat {
         row2.isHidden ? rowHeight : rowHeight + dividerHeight + subRowExtra
+    }
+
+    /// 主栏宽度与子栏内容取较大值；子项+色条变多时向右加宽。
+    private func fittedBarWidth() -> CGFloat {
+        let main = ceil(row1.fittingSize.width)
+        guard !row2.isHidden else { return max(baseWidth, main) }
+        let sub = ceil(row2.fittingSize.width)
+        return max(baseWidth, main, sub)
     }
 
     func setSelectedTool(_ tool: CaptureAnnotateTool?) {
@@ -244,9 +277,13 @@ final class CaptureToolbar: NSPanel {
         refreshSelectionUI()
     }
 
+    func setStrokeHue(_ hue: CGFloat) {
+        colorStrip.setHue(hue, notify: false)
+    }
+
     func place(under selection: CGRect, inScreenBounds screen: CGRect, bringToFront: Bool = true) {
         let h = height
-        let w = barWidth
+        let w = fittedBarWidth()
         var x = selection.midX - w / 2
         var y = selection.minY - h - selectionGap
         if y < screen.minY + 2 {
@@ -263,11 +300,12 @@ final class CaptureToolbar: NSPanel {
         stack.orientation = .horizontal
         stack.spacing = gap
         stack.alignment = .centerY
+        stack.setHuggingPriority(.required, for: .horizontal)
     }
 
     private func applyFrame(preserveOrigin: Bool) {
         let h = height
-        let w = barWidth
+        let w = fittedBarWidth()
         let next: NSRect
         if preserveOrigin {
             let top = frame.maxY
@@ -319,15 +357,25 @@ final class CaptureToolbar: NSPanel {
         let showArrow = selectedTool == .arrow
         let showPen = selectedTool == .pen
         let showMosaic = selectedTool == .mosaic
-        let showSub = showShape || showArrow || showPen || showMosaic
+        let showText = selectedTool == .text
+        let showColor = selectedTool?.showsStrokeColor(penStyle: penStyle) ?? false
+        let showSub = showShape || showArrow || showPen || showMosaic || showText
 
-        // 只用 isHidden，不在 layout 中增删 arrangedSubview
+        // 隐藏子栈仍会占 spacing；用 visibilityPriority 把色条贴到当前子项后面。
         shapeSubStack.isHidden = !showShape
         arrowSubStack.isHidden = !showArrow
         penSubStack.isHidden = !showPen
         mosaicSubStack.isHidden = !showMosaic
+        colorSep.isHidden = !showColor || showText
+        colorCluster.isHidden = !showColor
         row2.isHidden = !showSub
         rowDivider.isHidden = !showSub
+        row2.setVisibilityPriority(showShape ? .mustHold : .notVisible, for: shapeSubStack)
+        row2.setVisibilityPriority(showArrow ? .mustHold : .notVisible, for: arrowSubStack)
+        row2.setVisibilityPriority(showPen ? .mustHold : .notVisible, for: penSubStack)
+        row2.setVisibilityPriority(showMosaic ? .mustHold : .notVisible, for: mosaicSubStack)
+        row2.setVisibilityPriority(showColor ? .mustHold : .notVisible, for: colorCluster)
+        colorCluster.setVisibilityPriority((showColor && !showText) ? .mustHold : .notVisible, for: colorSep)
 
         rectButton.state = shapeStyle == .rect ? .on : .off
         ellipseButton.state = shapeStyle == .ellipse ? .on : .off
@@ -497,6 +545,7 @@ final class CaptureToolbar: NSPanel {
     @objc private func undoAction() { actionHandler?.toolbarUndo() }
     @objc private func redoAction() { actionHandler?.toolbarRedo() }
     @objc private func ocrAction() { actionHandler?.toolbarOCR() }
+    @objc private func translateAction() { actionHandler?.toolbarTranslate() }
     @objc private func scrollCaptureAction() { actionHandler?.toolbarScrollCapture() }
     @objc private func copyAction() { actionHandler?.toolbarCopy() }
     @objc private func saveAction() { actionHandler?.toolbarSave() }

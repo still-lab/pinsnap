@@ -9,6 +9,7 @@ final class OCRTextOverlayView: NSView {
         var frame: CGRect
         var font: NSFont
         var band: NSView
+        var label: NSTextField?
     }
 
     private struct Caret: Comparable {
@@ -27,6 +28,7 @@ final class OCRTextOverlayView: NSView {
     private var selectionLayer = CAShapeLayer()
     private var mouseDownPoint: CGPoint?
     private var didDrag = false
+    private var copyAllIfEmpty = false
 
     private let bandColor = NSColor.systemTeal.withAlphaComponent(0.16)
     private let selectionFill = NSColor.systemBlue.withAlphaComponent(0.20)
@@ -46,8 +48,9 @@ final class OCRTextOverlayView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func apply(lines raw: [OCRLine], imagePixelSize: CGSize, scale: CGFloat) {
+    func apply(lines raw: [OCRLine], imagePixelSize: CGSize, scale: CGFloat, showsText: Bool = false) {
         teardown()
+        copyAllIfEmpty = showsText
         guard imagePixelSize.width > 0, imagePixelSize.height > 0, scale > 0 else { return }
 
         var built: [LineBox] = []
@@ -64,12 +67,35 @@ final class OCRTextOverlayView: NSView {
 
             let band = NSView(frame: frame)
             band.wantsLayer = true
-            band.layer?.backgroundColor = bandColor.cgColor
             band.layer?.cornerRadius = 2
             band.layer?.masksToBounds = true
+            if showsText {
+                band.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.94).cgColor
+            } else {
+                band.layer?.backgroundColor = bandColor.cgColor
+            }
             addSubview(band)
 
-            built.append(LineBox(text: line.text, frame: frame, font: font, band: band))
+            var label: NSTextField?
+            if showsText {
+                let field = NSTextField(labelWithString: line.text)
+                field.font = font
+                field.textColor = .labelColor
+                field.lineBreakMode = .byTruncatingTail
+                field.maximumNumberOfLines = 3
+                field.refusesFirstResponder = true
+                field.isSelectable = false
+                field.isEditable = false
+                field.translatesAutoresizingMaskIntoConstraints = true
+                field.frame = band.bounds.insetBy(dx: 2, dy: 0)
+                field.autoresizingMask = [.width, .height]
+                (field.cell as? NSTextFieldCell)?.wraps = true
+                field.cell?.truncatesLastVisibleLine = true
+                band.addSubview(field)
+                label = field
+            }
+
+            built.append(LineBox(text: line.text, frame: frame, font: font, band: band, label: label))
         }
 
         built.sort { $0.frame.midY > $1.frame.midY }
@@ -78,8 +104,12 @@ final class OCRTextOverlayView: NSView {
     }
 
     func teardown() {
-        lines.forEach { $0.band.removeFromSuperview() }
+        lines.forEach {
+            $0.label?.removeFromSuperview()
+            $0.band.removeFromSuperview()
+        }
         lines.removeAll()
+        copyAllIfEmpty = false
         clearSelection()
     }
 
@@ -93,9 +123,26 @@ final class OCRTextOverlayView: NSView {
 
     @discardableResult
     func copySelectionToPasteboard() -> Bool {
-        let text = selectedPlainText()
+        writeToPasteboard(selectedPlainText())
+    }
+
+    @discardableResult
+    func copyAllToPasteboard() -> Bool {
+        writeToPasteboard(allPlainText())
+    }
+
+    func allPlainText() -> String {
+        lines.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
+    @objc func copy(_ sender: Any?) {
+        if !copySelectionToPasteboard(), copyAllIfEmpty {
+            _ = copyAllToPasteboard()
+        }
+    }
+
+    private func writeToPasteboard(_ text: String) -> Bool {
         guard !text.isEmpty else { return false }
-        // 只写纯文本，清掉 RTF/HTML 等
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
@@ -178,7 +225,9 @@ final class OCRTextOverlayView: NSView {
                 selectAll()
                 return
             case "c":
-                _ = copySelectionToPasteboard()
+                if !copySelectionToPasteboard(), copyAllIfEmpty {
+                    _ = copyAllToPasteboard()
+                }
                 return
             default:
                 break
