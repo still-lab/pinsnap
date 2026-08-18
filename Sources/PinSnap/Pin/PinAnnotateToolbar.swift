@@ -15,7 +15,7 @@ protocol PinAnnotateToolbarDelegate: AnyObject {
     func pinToolbarCancel()
 }
 
-/// 贴图底部标注条：仅标注子集 + 完成/取消。
+/// 贴图底部标注条：仅标注子集 + 完成/取消。宽度随内容自适应。
 @MainActor
 final class PinAnnotateToolbar: NSPanel {
     weak var actionHandler: PinAnnotateToolbarDelegate?
@@ -24,7 +24,6 @@ final class PinAnnotateToolbar: NSPanel {
     private let rowHeight: CGFloat = 34
     private let sidePad: CGFloat = 6
     private let gap: CGFloat = 4
-    private let baseWidth: CGFloat = 300
     private let subRowExtra: CGFloat = 28
     private let dividerHeight: CGFloat = 1
     private let selectionGap: CGFloat = 8
@@ -58,7 +57,7 @@ final class PinAnnotateToolbar: NSPanel {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: baseWidth, height: rowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: 1, height: rowHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -71,7 +70,7 @@ final class PinAnnotateToolbar: NSPanel {
         hidesOnDeactivate = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: baseWidth, height: rowHeight))
+        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 1, height: rowHeight))
         chrome.material = .popover
         chrome.blendingMode = .withinWindow
         chrome.state = .active
@@ -198,9 +197,9 @@ final class PinAnnotateToolbar: NSPanel {
 
     private func fittedBarWidth() -> CGFloat {
         let main = ceil(row1.fittingSize.width)
-        guard !row2.isHidden else { return max(baseWidth, main) }
+        guard !row2.isHidden else { return max(main, 1) }
         let sub = ceil(row2.fittingSize.width)
-        return max(baseWidth, main, sub)
+        return max(main, sub, 1)
     }
 
     func place(under pinFrame: CGRect) {

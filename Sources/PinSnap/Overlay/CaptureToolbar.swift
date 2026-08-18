@@ -21,7 +21,7 @@ protocol CaptureToolbarDelegate: AnyObject {
 }
 
 /// 两层工具条：点「形状」「箭头」「马赛克」展开第二层子项。
-/// 主栏定宽；子栏内容变宽时整条向右加宽，色条始终紧贴左侧子项。
+/// 宽度随主栏/子栏内容自适应；色条始终紧贴左侧子项。
 @MainActor
 final class CaptureToolbar: NSPanel {
     weak var actionHandler: CaptureToolbarDelegate?
@@ -30,7 +30,6 @@ final class CaptureToolbar: NSPanel {
     private let rowHeight: CGFloat = 34
     private let sidePad: CGFloat = 6
     private let gap: CGFloat = 4
-    private let baseWidth: CGFloat = 448
     private let subRowExtra: CGFloat = 28
     private let dividerHeight: CGFloat = 1
     /// 工具条与选区之间的间距
@@ -71,7 +70,7 @@ final class CaptureToolbar: NSPanel {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: baseWidth, height: rowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: 1, height: rowHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -85,7 +84,7 @@ final class CaptureToolbar: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         // contentView 跟窗口 frame 走 autoresizing，避免 width 约束 + setFrame 互相递归 layout
-        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: baseWidth, height: rowHeight))
+        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 1, height: rowHeight))
         chrome.material = .popover
         chrome.blendingMode = .withinWindow
         chrome.state = .active
@@ -239,12 +238,12 @@ final class CaptureToolbar: NSPanel {
         row2.isHidden ? rowHeight : rowHeight + dividerHeight + subRowExtra
     }
 
-    /// 主栏宽度与子栏内容取较大值；子项+色条变多时向右加宽。
+    /// 主栏与子栏内容取较大值；工具增减时整条随之变宽/变窄。
     private func fittedBarWidth() -> CGFloat {
         let main = ceil(row1.fittingSize.width)
-        guard !row2.isHidden else { return max(baseWidth, main) }
+        guard !row2.isHidden else { return max(main, 1) }
         let sub = ceil(row2.fittingSize.width)
-        return max(baseWidth, main, sub)
+        return max(main, sub, 1)
     }
 
     func setSelectedTool(_ tool: CaptureAnnotateTool?) {
