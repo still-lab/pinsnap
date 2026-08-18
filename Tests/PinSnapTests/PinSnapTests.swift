@@ -71,6 +71,7 @@ final class FeatureGateTests: XCTestCase {
         FeatureGate.shared.applyEntitlement(isPro: false)
         XCTAssertFalse(FeatureGate.shared.isEnabled(.pinUnlimited))
         XCTAssertFalse(FeatureGate.shared.isEnabled(.ocr))
+        XCTAssertFalse(FeatureGate.shared.isEnabled(.translate))
     }
 
     @MainActor
@@ -94,6 +95,20 @@ final class OCRGeometryTests: XCTestCase {
         XCTAssertEqual(logical.minY, 10, accuracy: 0.01)
         XCTAssertEqual(logical.width, 50, accuracy: 0.01)
         XCTAssertEqual(logical.height, 20, accuracy: 0.01)
+    }
+}
+
+final class TranslateRoutingTests: XCTestCase {
+    func testSimplifiedChineseTargetsEnglish() {
+        let pair = TranslateRouting.pair(for: "这是一段用来识别语言的中文文本内容，需要足够长。")
+        XCTAssertEqual(pair.target.languageCode?.identifier, "en")
+        XCTAssertEqual(pair.source?.languageCode?.identifier, "zh")
+    }
+
+    func testEnglishTargetsSimplifiedChinese() {
+        let pair = TranslateRouting.pair(for: "This is a sufficiently long English sentence for language detection.")
+        XCTAssertEqual(pair.target.languageCode?.identifier, "zh")
+        XCTAssertEqual(pair.source?.languageCode?.identifier, "en")
     }
 }
 

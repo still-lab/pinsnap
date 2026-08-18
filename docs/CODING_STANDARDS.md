@@ -4,7 +4,7 @@
 
 - Swift 5.9+，严格模式（尽量避免强制解包；必要时 `precondition` 写清不变量）。
 - UI：截图/贴图/Overlay 用 **AppKit**；设置/引导/商店页用 **SwiftUI**。
-- 最低部署：macOS 13。
+- 最低部署：macOS 15.0。
 
 ## 命名
 

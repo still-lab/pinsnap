@@ -1,6 +1,6 @@
 # 实施状态（对照全覆盖计划）
 
-更新：2026-08-06 — M0–M2 完成；M3 进行中。快捷保存 ⌘S、存储目录/格式接线、贴图右键标注已落地。
+更新：2026-08-18 — 最低系统抬至 macOS 15；系统 Translation 已接 OCR 出口。
 
 ## 阶段完成度
 
@@ -13,7 +13,7 @@
 | F M3 | 进行中 | 见下方「M3 细项」 |
 | G M4 | 未就绪 | 本地化/Connect/TestFlight 需账号侧 Ext |
 | H 运营 | 流程文档 | CONNECT_SETUP / STORE_CHECKLIST 可跟踪 |
-| I v1.1 | 代码落地 | `OCRService`（Vision 文本+条码） |
+| I v1.1 | 代码落地 | `OCRService`（Vision 文本+条码）；系统 Translation（工具条「译」，语言包已装可离线） |
 | J v1.2 | 骨架 | `AccessibilitySnap` 占位 + 文件名模板/导出扩展点 |
 | K v1.3+ | 进行中 | 长截：`captureRegion` + `ScrollStitcher` 条带对齐 + Overlay 滚动态；录屏仍为骨架 |
 
@@ -25,7 +25,7 @@
 | 剪贴板文本 / 色卡贴图 | 代码已有；建议再验 |
 | 延时截图（C-11） | **已完成**：菜单入口，固定 5s；菜单栏数字倒计时 |
 | 上次区域（C-10） | **已完成**：状态栏菜单 + F1 连击；无上次选区时回落普通截图 |
-| FeatureGate ↔ StoreKit 沙盒 | 真门控已接：`isEnabled = isPro || debugForcePro`；DEBUG 全开（全免费），Release 按 Free 拦截（≤3 贴图、隐藏 OCR/延时）；StoreKit 购买/恢复待 Sandbox 联调 |
+| FeatureGate ↔ StoreKit 沙盒 | 真门控已接：`isEnabled = isPro || debugForcePro`；DEBUG 全开（全免费），Release 按 Free 拦截（≤3 贴图、隐藏 OCR/翻译/延时）；StoreKit 购买/恢复待 Sandbox 联调 |
 | 取色 HEX/RGB（C-09） | **已完成**：双格式色卡；C 复制 / Tab 切换 |
 | 放大镜（C-08） | **已完成**：仅取色模式显示 |
 | 选区方向键微调（C-07） | **已完成**：←↑↓→，Shift 步进 10 |

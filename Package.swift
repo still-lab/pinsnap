@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "PinSnapKit",
     platforms: [
-        .macOS(.v13),
+        .macOS(.v14),
     ],
     products: [
         .library(name: "PinSnapKit", targets: ["PinSnapKit"]),
@@ -22,6 +22,8 @@ let package = Package(
                 .linkedFramework("ServiceManagement"),
                 .linkedFramework("StoreKit"),
                 .linkedFramework("Vision"),
+                .linkedFramework("NaturalLanguage"),
+                .linkedFramework("Translation"),
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("SwiftUI"),
             ]

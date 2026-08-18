@@ -6,7 +6,7 @@
 
 ## M0 — 骨架（约 1 周）
 
-- [x] 用 Xcode 创建 macOS App（Bundle `app.pinsnap.macos`，macOS 13，Universal）
+- [x] 用 Xcode 创建 macOS App（Bundle `app.pinsnap.macos`，当前最低 macOS 15.0，Universal）
 - [x] 启用 App Sandbox；无多余 entitlement
 - [x] MenuBarExtra / 状态栏图标
 - [x] HotKeyCenter 注册 F1 / F1×2 / ⌘T / F3 / ⌘H / ⌘⇧H
@@ -67,7 +67,7 @@
 
 | 版本 | 内容 |
 |---|---|
-| v1.1 | OCR + 二维码 |
+| v1.1 | OCR + 二维码 + 系统翻译 |
 | v1.2 | AX 吸附、圆角阴影、文件名模板、色域 |
 | v1.3+ | 长截图、录屏 |
 

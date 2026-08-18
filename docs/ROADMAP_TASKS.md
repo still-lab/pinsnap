@@ -71,7 +71,7 @@
 ## C1 Xcode 工程
 
 - [ ] C-001 创建 macOS App Target「PinSnap」
-- [ ] C-002 Deployment macOS 13.0；Universal
+- [x] C-002 Deployment macOS 15.0；Universal
 - [ ] C-003 Bundle ID `app.pinsnap.macos`
 - [ ] C-004 显示名 PinSnap；中文名「截图与贴图」本地化键
 - [ ] C-005 启用 App Sandbox
@@ -499,7 +499,7 @@
 - [ ] K-043 热键忽略列表（前台 App）
 - [ ] K-044 命令面板 / URL Scheme
 - [ ] K-045 屏幕触发角（慎与系统冲突）
-- [ ] K-046 翻译（系统 Translation）
+- [x] K-046 翻译（系统 Translation）
 - [ ] K-047 Solo / 多选贴图等 Snipaste Pro 项拣选
 
 ---

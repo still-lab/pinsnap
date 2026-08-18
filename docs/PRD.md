@@ -13,7 +13,7 @@ PinSnap 是菜单栏常驻的 Mac 截图贴图工具：用户主动截屏，标�
 | 显示名 | PinSnap |
 | 中文副标题 | 截图与贴图 |
 | Bundle ID | `app.pinsnap.macos` |
-| 最低系统 | macOS 13.0 Ventura |
+| 最低系统 | macOS 15.0 Sequoia |
 | 架构 | Universal |
 | 分发 | 仅 MAS（首发无官网非沙盒版） |
 | 热键 | F1 截图 · ⌘T 延时 · F1×2 上次区域 · F3 贴图 · ⌘H 隐藏 · ⌘⇧H 显示；Overlay 内 ⌘S 快捷保存 · ⌘⇧S 另存为 |
@@ -64,6 +64,6 @@ PinSnap 是菜单栏常驻的 Mac 截图贴图工具：用户主动截屏，标�
 
 | 版本 | 内容 |
 |---|---|
-| v1.1 | Vision OCR + 二维码（Pro） |
+| v1.1 | Vision OCR + 二维码 + 系统翻译（Pro） |
 | v1.2 | AX 元素吸附、圆角阴影、文件名模板、色域 |
 | v1.3+ | 长截图、录屏 |

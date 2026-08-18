@@ -10,6 +10,7 @@ public enum Feature: String, CaseIterable, Codable, Sendable {
     case advancedAnnotate
     case filenameTemplate
     case ocr
+    case translate
 }
 
 @MainActor

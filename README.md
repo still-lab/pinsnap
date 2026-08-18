@@ -2,20 +2,20 @@
 
 > 菜单栏常驻的 macOS **截图 + 贴图**工具 · 对标 Snipaste 贴图深度 · 目标上架 Mac App Store
 
-![macOS](https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white)
+![macOS](https://img.shields.io/badge/macOS-15%2B-000000?logo=apple&logoColor=white)
 ![Swift](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Status](https://img.shields.io/badge/M0%E2%80%93M2%20%E5%AE%8C%E6%88%90-M3%20%E8%BF%9B%E8%A1%8C%E4%B8%AD-blue)
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-still--lab.github.io%2Fpinsnap-222?logo=github&logoColor=white)](https://still-lab.github.io/pinsnap/)
 
 一次截图，随取随贴。轻量常驻菜单栏，截图 → 标注 → 贴图一条龙，剪贴板里的图、文本、色卡也能一键贴成可置顶的小窗。
 
 | 项 | 值 |
 |---|---|
 | Bundle ID | `app.pinsnap.macos` |
-| 最低系统 | macOS 13.0 |
+| 最低系统 | macOS 15.0 |
 | 语言 | Swift · AppKit（截图/贴图）+ SwiftUI（设置） |
 | 分发 | 仅 Mac App Store |
-| 官网 | [still-lab.github.io/pinsnap](https://still-lab.github.io/pinsnap/) |
 | 授权 | [MIT](LICENSE) |
 
 ## ✨ 功能特性
@@ -40,7 +40,8 @@
 ### 效率
 - 全局热键（见下表）
 - 快捷保存 ⌘S、⌘⇧S 另存；PNG/JPEG、存储目录书签、文件名模板
-- OCR（Vision 文本 + 条码，v1.1 已落地）
+- OCR（Vision 文本 + 条码）
+- 翻译（系统 Translation，中英互译；语言包已装可离线）
 
 ## ⌨️ 默认热键
 
@@ -90,7 +91,7 @@ Sources/PinSnap/
   Export/        # 存盘、文件名模板
   Purchase/      # StoreKit 2、FeatureGate
   Settings/      # SwiftUI 设置
-  Vision/        # OCR（文本 + 条码）
+  Vision/        # OCR（文本 + 条码）+ 系统翻译
   Support/       # 日志、Toast、通用工具
 Tests/PinSnapTests/
 docs/
@@ -119,7 +120,7 @@ swift test
 | M0–M2 | ✅ 完成 | 骨架、截图、标注 + 基础贴图 |
 | M3 | 🔄 进行中 | 贴图深度（生命周期/剪贴板桥）、Pro 能力 |
 | M4 | ⏳ 未就绪 | 本地化 / Connect / TestFlight（需账号侧） |
-| v1.1 | ✅ 代码落地 | OCR（Vision 文本 + 条码） |
+| v1.1 | ✅ 代码落地 | OCR（Vision 文本 + 条码）、系统翻译 |
 | v1.2 | 🦴 骨架 | AccessibilitySnap、文件名模板扩展 |
 | v1.3+ | 🔄 进行中 | 长截图拼接（ScrollStitcher）、录屏 |
 

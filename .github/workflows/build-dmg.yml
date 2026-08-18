@@ -75,7 +75,7 @@ jobs:
             echo "Release v${VER} already exists, uploading assets..."
             gh release upload "v${VER}" "$FIXED" "$DMG" --clobber
           else
-            NOTES="- 下载: https://github.com/still-lab/pinsnap/releases/latest/download/PinSnap-trial.dmg | macOS 13.0+ · Universal"
+            NOTES="- 下载: https://github.com/still-lab/pinsnap/releases/latest/download/PinSnap-trial.dmg | macOS 15+ · Universal"
             gh release create "v${VER}" \
               "$FIXED" "$DMG" \
               --title "PinSnap v${VER}" \

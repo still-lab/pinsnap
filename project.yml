@@ -2,7 +2,7 @@ name: PinSnap
 options:
   bundleIdPrefix: app.pinsnap
   deploymentTarget:
-    macOS: "13.0"
+    macOS: "15.0"
   createIntermediateGroups: true
   groupSortPosition: top
 settings:
@@ -10,7 +10,7 @@ settings:
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.9"
-    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
 packages:
   PinSnapKit:
     path: .

@@ -18,9 +18,7 @@ public enum OCRService {
                     let request = VNRecognizeTextRequest()
                     request.recognitionLevel = .accurate
                     request.usesLanguageCorrection = true
-                    if #available(macOS 13.0, *) {
-                        request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US"]
-                    }
+                    request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US"]
                     let handler = VNImageRequestHandler(cgImage: image, options: [:])
                     try handler.perform([request])
                     let lines: [OCRLine] = (request.results ?? []).compactMap { observation in

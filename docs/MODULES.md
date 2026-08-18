@@ -12,13 +12,14 @@
 | `Sources/PinSnap/Export` | Export | ImageExporter、FilenameTemplate、SavePreferences |
 | `Sources/PinSnap/Purchase` | Purchase | StoreClient、FeatureGate、EntitlementSync |
 | `Sources/PinSnap/Settings` | Settings | SwiftUI Settings scene |
+| `Sources/PinSnap/Vision` | Vision | OCR（文本+条码）、系统 Translation |
 | `Sources/PinSnap/Support` | Support | Logger、Toast、AtomicFile、Result 扩展 |
 
 ## 依赖（允许方向）
 
 ```
-App → Capture, Overlay, Annotate, Pin, Export, Purchase, Settings, Support
-Overlay → Capture, Annotate, Support
+App → Capture, Overlay, Annotate, Pin, Export, Purchase, Settings, Support, Vision
+Overlay → Capture, Annotate, Support, Vision
 Pin → Annotate, Purchase, Support
 Export → Support
 Capture → Support
@@ -52,6 +53,12 @@ Settings → Purchase, Support
 - `AnnotationDocument` 值类型 + `AnnotationController`。
 - `exportFlattened() -> CGImage`。
 
+### Vision
+
+- `OCRService`：行级文本 + 条码。
+- `SystemTranslator`：系统 Translation；语言包 `.installed` 后离线。
+- `TranslateRouting`：中英目标语言。
+
 ### Pin
 
 - `PinStore`：`create` / `close` / `destroy` / `hideAll`（v1.0 不做 `restoreSession`）。
@@ -79,4 +86,4 @@ Settings → Purchase, Support
 | 剪贴板解析 | `ClipboardBridgeTests` |
 | Pin 生命周期 | `PinStoreTests` |
 | Feature 边界 | `FeatureGateTests` |
-| Undo | `AnnotationUndoTests` |
+| 语言路由 | `TranslateRoutingTests` |

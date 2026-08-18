@@ -120,30 +120,27 @@ public struct CaptureService: CaptureServiceProtocol {
             return image
         }
 
-        if #available(macOS 14.0, *) {
-            do {
-                let image = try await captureRegionByDisplayCrop(
-                    selection,
-                    screen: screen,
-                    excludingWindowIDs: excludingWindowIDs
-                )
-                if Self.imageHasOpaqueContent(image) {
-                    return image
-                }
-                PinSnapLog.capture.error(
-                    "captureRegion crop empty \(image.width)x\(image.height)"
-                )
-            } catch CaptureError.permissionDenied {
-                throw CaptureError.permissionDenied
-            } catch {
-                PinSnapLog.capture.error("captureRegion SCK crop: \(error.localizedDescription)")
+        do {
+            let image = try await captureRegionByDisplayCrop(
+                selection,
+                screen: screen,
+                excludingWindowIDs: excludingWindowIDs
+            )
+            if Self.imageHasOpaqueContent(image) {
+                return image
             }
+            PinSnapLog.capture.error(
+                "captureRegion crop empty \(image.width)x\(image.height)"
+            )
+        } catch CaptureError.permissionDenied {
+            throw CaptureError.permissionDenied
+        } catch {
+            PinSnapLog.capture.error("captureRegion SCK crop: \(error.localizedDescription)")
         }
 
         throw CaptureError.failed("选区截帧失败")
     }
 
-    @available(macOS 14.0, *)
     private func captureRegionByDisplayCrop(
         _ selection: CaptureSelection,
         screen: ScreenDescriptor,
@@ -253,36 +250,24 @@ public struct CaptureService: CaptureServiceProtocol {
         scale: CGFloat,
         excludingWindows: [SCWindow] = []
     ) async throws -> CGImage {
-        if #available(macOS 14.0, *) {
-            let filter = SCContentFilter(display: display, excludingWindows: excludingWindows)
-            let config = SCStreamConfiguration()
-            config.width = max(1, Int((logicalFrame.width * scale).rounded()))
-            config.height = max(1, Int((logicalFrame.height * scale).rounded()))
-            config.showsCursor = false
-            config.pixelFormat = kCVPixelFormatType_32BGRA
-            config.captureResolution = .best
-            do {
-                return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            } catch {
-                let ns = error as NSError
-                PinSnapLog.capture.error(
-                    "SCScreenshotManager domain=\(ns.domain) code=\(ns.code) \(error.localizedDescription)"
-                )
-                if Self.isPermissionError(ns) {
-                    throw CaptureError.permissionDenied
-                }
-                throw CaptureError.failed(error.localizedDescription)
+        let filter = SCContentFilter(display: display, excludingWindows: excludingWindows)
+        let config = SCStreamConfiguration()
+        config.width = max(1, Int((logicalFrame.width * scale).rounded()))
+        config.height = max(1, Int((logicalFrame.height * scale).rounded()))
+        config.showsCursor = false
+        config.pixelFormat = kCVPixelFormatType_32BGRA
+        config.captureResolution = .best
+        do {
+            return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        } catch {
+            let ns = error as NSError
+            PinSnapLog.capture.error(
+                "SCScreenshotManager domain=\(ns.domain) code=\(ns.code) \(error.localizedDescription)"
+            )
+            if Self.isPermissionError(ns) {
+                throw CaptureError.permissionDenied
             }
-        } else {
-            guard let cgImage = CGWindowListCreateImage(
-                logicalFrame,
-                .optionOnScreenOnly,
-                kCGNullWindowID,
-                [.bestResolution, .boundsIgnoreFraming]
-            ) else {
-                throw CaptureError.failed("截帧失败")
-            }
-            return cgImage
+            throw CaptureError.failed(error.localizedDescription)
         }
     }
 }

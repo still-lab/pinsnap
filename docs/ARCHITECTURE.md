@@ -6,7 +6,7 @@
 2. **截图会话与贴图运行时解耦**：Committing 后可贴图，Pin 独立存活。
 3. **禁止 UI 直连 ScreenCaptureKit**：一律经 `CaptureKit`（`Capture` 模块）。
 4. **FeatureGate 横切**：Free/Pro 能力用枚举门控，不散落魔法布尔。
-5. **本地优先**：v1.0 无网络依赖（内购收据校验除外）。
+5. **本地优先**：截图 / OCR / 翻译推理在本机；v1.0 无自建网络（内购收据校验除外）。系统 Translation 语言包由系统安装。
 
 ## 分层
 
@@ -85,4 +85,4 @@ Idle
 | 屏幕录制 | 首次截图 Preparing |
 | 辅助功能 | ≥ v1.2 元素吸附才申请 |
 | 麦克风 | ≥ v1.3 录屏才申请 |
-| 网络 | v1.0 仅 StoreKit；网页拖图为 P3 |
+| 网络 | v1.0 仅 StoreKit；系统 Translation 语言包由系统下载；网页拖图为 P3 |
