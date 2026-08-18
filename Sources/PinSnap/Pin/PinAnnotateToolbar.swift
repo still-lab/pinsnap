@@ -8,6 +8,7 @@ protocol PinAnnotateToolbarDelegate: AnyObject {
     func pinToolbarSelectArrowStyle(_ style: CaptureArrowStyle)
     func pinToolbarSelectMosaicStyle(_ style: CaptureMosaicStyle)
     func pinToolbarSelectPenStyle(_ style: CapturePenStyle)
+    func pinToolbarSelectStrokeHue(_ hue: CGFloat)
     func pinToolbarUndo()
     func pinToolbarRedo()
     func pinToolbarDone()
@@ -23,7 +24,7 @@ final class PinAnnotateToolbar: NSPanel {
     private let rowHeight: CGFloat = 34
     private let sidePad: CGFloat = 6
     private let gap: CGFloat = 4
-    private let barWidth: CGFloat = 300
+    private let baseWidth: CGFloat = 300
     private let subRowExtra: CGFloat = 28
     private let dividerHeight: CGFloat = 1
     private let selectionGap: CGFloat = 8
@@ -51,10 +52,13 @@ final class PinAnnotateToolbar: NSPanel {
     private var eraserModeButton: NSButton!
     private var mosaicModeButton: NSButton!
     private var blurModeButton: NSButton!
+    private let colorCluster = NSStackView()
+    private var colorSep: NSView!
+    private let colorStrip = StrokeColorStrip()
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: barWidth, height: rowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: baseWidth, height: rowHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -67,7 +71,7 @@ final class PinAnnotateToolbar: NSPanel {
         hidesOnDeactivate = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: barWidth, height: rowHeight))
+        let chrome = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: baseWidth, height: rowHeight))
         chrome.material = .popover
         chrome.blendingMode = .withinWindow
         chrome.state = .active
@@ -92,9 +96,13 @@ final class PinAnnotateToolbar: NSPanel {
         row2.orientation = .horizontal
         row2.spacing = gap
         row2.alignment = .centerY
+        row2.distribution = .gravityAreas
         row2.edgeInsets = NSEdgeInsets(top: 3, left: sidePad, bottom: 3, right: sidePad)
         row2.isHidden = true
         row2.translatesAutoresizingMaskIntoConstraints = false
+        row2.detachesHiddenViews = true
+        row2.setHuggingPriority(.required, for: .horizontal)
+        row2.setClippingResistancePriority(.required, for: .horizontal)
 
         for tool in CaptureAnnotateTool.allCases {
             let b: NSButton
@@ -148,10 +156,19 @@ final class PinAnnotateToolbar: NSPanel {
         mosaicSubStack.addArrangedSubview(mosaicModeButton)
         mosaicSubStack.addArrangedSubview(blurModeButton)
 
-        row2.addArrangedSubview(shapeSubStack)
-        row2.addArrangedSubview(arrowSubStack)
-        row2.addArrangedSubview(penSubStack)
-        row2.addArrangedSubview(mosaicSubStack)
+        row2.addView(shapeSubStack, in: .leading)
+        row2.addView(arrowSubStack, in: .leading)
+        row2.addView(penSubStack, in: .leading)
+        row2.addView(mosaicSubStack, in: .leading)
+        configureSubStack(colorCluster)
+        colorSep = sep()
+        colorCluster.addArrangedSubview(colorSep)
+        colorStrip.onHueChange = { [weak self] hue in
+            self?.actionHandler?.pinToolbarSelectStrokeHue(hue)
+        }
+        colorCluster.addArrangedSubview(colorStrip)
+        colorCluster.setHuggingPriority(.required, for: .horizontal)
+        row2.addView(colorCluster, in: .leading)
         hideAllSubs()
 
         let divider = NSView()
@@ -171,8 +188,6 @@ final class PinAnnotateToolbar: NSPanel {
             rootStack.trailingAnchor.constraint(equalTo: chrome.trailingAnchor),
             rootStack.topAnchor.constraint(equalTo: chrome.topAnchor),
             rootStack.bottomAnchor.constraint(equalTo: chrome.bottomAnchor),
-            row1.widthAnchor.constraint(equalToConstant: barWidth),
-            row2.widthAnchor.constraint(equalToConstant: barWidth),
         ])
         refreshSelectionUI()
     }
@@ -181,12 +196,19 @@ final class PinAnnotateToolbar: NSPanel {
         row2.isHidden ? rowHeight : rowHeight + dividerHeight + subRowExtra
     }
 
+    private func fittedBarWidth() -> CGFloat {
+        let main = ceil(row1.fittingSize.width)
+        guard !row2.isHidden else { return max(baseWidth, main) }
+        let sub = ceil(row2.fittingSize.width)
+        return max(baseWidth, main, sub)
+    }
+
     func place(under pinFrame: CGRect) {
         let screen = NSScreen.screens.first(where: { $0.frame.intersects(pinFrame) })?.frame
             ?? NSScreen.main?.frame
             ?? pinFrame
         let h = barHeight
-        let w = barWidth
+        let w = fittedBarWidth()
         var x = pinFrame.midX - w / 2
         var y = pinFrame.minY - h - selectionGap
         if y < screen.minY + 2 {
@@ -197,10 +219,15 @@ final class PinAnnotateToolbar: NSPanel {
         orderFrontRegardless()
     }
 
+    func setStrokeHue(_ hue: CGFloat) {
+        colorStrip.setHue(hue, notify: false)
+    }
+
     private func configureSubStack(_ stack: NSStackView) {
         stack.orientation = .horizontal
         stack.spacing = gap
         stack.alignment = .centerY
+        stack.setHuggingPriority(.required, for: .horizontal)
     }
 
     private func hideAllSubs() {
@@ -208,7 +235,14 @@ final class PinAnnotateToolbar: NSPanel {
         arrowSubStack.isHidden = true
         penSubStack.isHidden = true
         mosaicSubStack.isHidden = true
+        colorSep.isHidden = true
+        colorCluster.isHidden = true
         row2.isHidden = true
+        row2.setVisibilityPriority(.notVisible, for: shapeSubStack)
+        row2.setVisibilityPriority(.notVisible, for: arrowSubStack)
+        row2.setVisibilityPriority(.notVisible, for: penSubStack)
+        row2.setVisibilityPriority(.notVisible, for: mosaicSubStack)
+        row2.setVisibilityPriority(.notVisible, for: colorCluster)
     }
 
     private func refreshSelectionUI() {
@@ -232,29 +266,42 @@ final class PinAnnotateToolbar: NSPanel {
         case .shape:
             row2.isHidden = false
             shapeSubStack.isHidden = false
+            row2.setVisibilityPriority(.mustHold, for: shapeSubStack)
             rectButton.contentTintColor = shapeStyle == .rect ? .controlAccentColor : idle
             ellipseButton.contentTintColor = shapeStyle == .ellipse ? .controlAccentColor : idle
         case .arrow:
             row2.isHidden = false
             arrowSubStack.isHidden = false
+            row2.setVisibilityPriority(.mustHold, for: arrowSubStack)
             lineModeButton.contentTintColor = arrowStyle == .line ? .controlAccentColor : idle
             arrowModeButton.contentTintColor = arrowStyle == .arrow ? .controlAccentColor : idle
         case .pen:
             row2.isHidden = false
             penSubStack.isHidden = false
+            row2.setVisibilityPriority(.mustHold, for: penSubStack)
             penModeButton.contentTintColor = penStyle == .pen ? .controlAccentColor : idle
             markerModeButton.contentTintColor = penStyle == .marker ? .controlAccentColor : idle
             eraserModeButton.contentTintColor = penStyle == .eraser ? .controlAccentColor : idle
         case .mosaic:
             row2.isHidden = false
             mosaicSubStack.isHidden = false
+            row2.setVisibilityPriority(.mustHold, for: mosaicSubStack)
             mosaicModeButton.contentTintColor = mosaicStyle == .mosaic ? .controlAccentColor : idle
             blurModeButton.contentTintColor = mosaicStyle == .blur ? .controlAccentColor : idle
+        case .text:
+            row2.isHidden = false
         default:
             break
         }
+        let showColor = selectedTool?.showsStrokeColor(penStyle: penStyle) ?? false
+        let showSep = showColor && selectedTool != .text
+        colorSep.isHidden = !showSep
+        colorCluster.isHidden = !showColor
+        row2.setVisibilityPriority(showColor ? .mustHold : .notVisible, for: colorCluster)
+        colorCluster.setVisibilityPriority(showSep ? .mustHold : .notVisible, for: colorSep)
         let h = barHeight
-        setFrame(NSRect(x: frame.origin.x, y: frame.maxY - h, width: barWidth, height: h), display: true)
+        let w = fittedBarWidth()
+        setFrame(NSRect(x: frame.origin.x, y: frame.maxY - h, width: w, height: h), display: true)
     }
 
     private func symbol(for tool: CaptureAnnotateTool) -> String {

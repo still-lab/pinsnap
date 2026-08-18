@@ -38,3 +38,14 @@ public enum CapturePenStyle: Int, Sendable {
     case marker
     case eraser
 }
+
+extension CaptureAnnotateTool {
+    /// 矩形 / 椭圆 / 直线 / 箭头 / 画笔 / 文字可改颜色；记号笔、橡皮、马赛克不展示。
+    public func showsStrokeColor(penStyle: CapturePenStyle) -> Bool {
+        switch self {
+        case .shape, .arrow, .text: return true
+        case .pen: return penStyle == .pen
+        case .mosaic: return false
+        }
+    }
+}

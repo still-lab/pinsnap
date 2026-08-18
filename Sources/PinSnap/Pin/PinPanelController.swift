@@ -24,6 +24,7 @@ public final class PinPanelController: NSObject, NSWindowDelegate, PinAnnotateTo
     private var arrowStyle: CaptureArrowStyle = .arrow
     private var mosaicStyle: CaptureMosaicStyle = .mosaic
     private var penStyle: CapturePenStyle = .pen
+    private var strokeHue: CGFloat = StrokeColorStrip.defaultHue
 
     init(item: PinItem, imageURL: URL, store: PinStore) {
         self.item = item
@@ -144,11 +145,13 @@ public final class PinPanelController: NSObject, NSWindowDelegate, PinAnnotateTo
         let canvas = PinAnnotateCanvas(frame: imageView.bounds)
         canvas.autoresizingMask = [.width, .height]
         canvas.delegate = self
+        canvas.strokeColor = StrokeColorStrip.color(hue: strokeHue)
         imageView.addSubview(canvas)
         annotationView = canvas
 
         let bar = PinAnnotateToolbar()
         bar.actionHandler = self
+        bar.setStrokeHue(strokeHue)
         bar.place(under: panel.frame)
         annotateToolbar = bar
 
@@ -270,6 +273,11 @@ public final class PinPanelController: NSObject, NSWindowDelegate, PinAnnotateTo
         penStyle = style
         activeTool = .pen
         annotationView?.activeKind = currentShapeKind()
+    }
+
+    func pinToolbarSelectStrokeHue(_ hue: CGFloat) {
+        strokeHue = StrokeColorStrip.clamp(hue)
+        annotationView?.strokeColor = StrokeColorStrip.color(hue: strokeHue)
     }
 
     func pinToolbarUndo() {
@@ -451,7 +459,13 @@ extension PinPanelController: PinAnnotateCanvasDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        annotations.add(Shape(kind: .text, lineWidth: 16, points: [local], text: text, color: .systemRed))
+        annotations.add(Shape(
+            kind: .text,
+            lineWidth: 16,
+            points: [local],
+            text: text,
+            color: annotationView?.strokeColor ?? StrokeColorStrip.color(hue: strokeHue)
+        ))
         refreshAnnotationPreview()
     }
 
@@ -467,6 +481,7 @@ private final class PinAnnotateCanvas: NSView {
     var activeKind: ShapeKind?
     var draft: Shape?
     var previewImage: NSImage?
+    var strokeColor: NSColor = StrokeColorStrip.color(hue: StrokeColorStrip.defaultHue)
 
     private var dragStart: CGPoint?
 
@@ -544,9 +559,9 @@ private final class PinAnnotateCanvas: NSView {
         case .eraser:
             return Shape(kind: .eraser, lineWidth: 18, points: [local], color: .black)
         case .freehand:
-            return Shape(kind: .freehand, lineWidth: 3, points: [local])
+            return Shape(kind: .freehand, lineWidth: 3, points: [local], color: strokeColor)
         default:
-            return Shape(kind: kind, lineWidth: 2, points: [local])
+            return Shape(kind: kind, lineWidth: 2, points: [local], color: strokeColor)
         }
     }
 }
